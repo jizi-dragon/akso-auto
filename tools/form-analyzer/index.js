@@ -338,13 +338,10 @@ function selectLayout(layouts, preferredName) {
     if (partial) { console.log(`  部分匹配选择: ${partial.name}\n`); return [partial]; }
     console.log(`  错误: 未找到名为 "${layoutName}" 的布局`);
     console.log(`  可用布局: ${layouts.map(l => `"${l.name}"`).join(', ')}`);
-    process.exit(1);
+    throw new Error(`未找到名为 "${layoutName}" 的布局`);
   }
 
-  console.log(`  错误: 该对象有 ${layouts.length} 个布局，请通过 AKSO_LAYOUT_NAME 环境变量指定其中一个。`);
-  console.log(`  可用布局: ${layouts.map(l => `"${l.name}"`).join(', ')}`);
-  console.log(`  示例: $env:AKSO_LAYOUT_NAME='默认布局'; node analyze-form-fields.js "${process.argv[2]}"`);
-  process.exit(1);
+  throw new Error(`该对象有 ${layouts.length} 个布局，请通过 AKSO_LAYOUT_NAME 环境变量或 task 中的 layout 字段指定。可用布局: ${layouts.map(l => `"${l.name}"`).join(', ')}`);
 }
 
 function prompt(question) {
@@ -352,26 +349,10 @@ function prompt(question) {
   return new Promise(resolve => rl.question(question, answer => { rl.close(); resolve(answer.trim()); }));
 }
 
-async function resolveConfig() {
-  const objectName = process.argv[2];
-  if (!objectName || !objectName.trim()) {
-    console.log('用法: node analyze-form-fields.js <对象名称>');
-    console.log('示例: node analyze-form-fields.js "CAPA"');
-    console.log();
-    console.log('环境变量（可选）:');
-    console.log('  AKSO_BASE_URL    Akso 系统地址（如 https://xxx.aksoegmp.com）');
-    console.log('  AKSO_USERNAME    登录用户名');
-    console.log('  AKSO_PASSWORD    登录密码');
-    console.log('  AKSO_LAYOUT_NAME 指定表单布局名称（多个布局时推荐）');
-    console.log();
-    console.log('未设置的环境变量将在运行时交互式询问。');
-    process.exit(1);
-  }
-
+async function resolveEnv() {
   let baseUrl = process.env.AKSO_BASE_URL;
   let username = process.env.AKSO_USERNAME;
   let password = process.env.AKSO_PASSWORD;
-  let layoutName = process.env.AKSO_LAYOUT_NAME;
 
   const missing = [];
   if (!baseUrl) missing.push('AKSO_BASE_URL（系统地址）');
@@ -391,17 +372,131 @@ async function resolveConfig() {
 
   baseUrl = baseUrl.replace(/\/+$/, '');
 
-  return { objectName: objectName.trim(), baseUrl, username, password, layoutName };
+  return { baseUrl, username, password };
+}
+
+function resolveTasks(argv) {
+  if (argv.includes('--batch')) {
+    const idx = argv.indexOf('--batch');
+    const batchFile = argv[idx + 1];
+    if (!batchFile) {
+      console.log('用法: node tools/form-analyzer/index.js --batch <任务清单.json>');
+      console.log('示例: node tools/form-analyzer/index.js --batch tasks.json');
+      process.exit(1);
+    }
+
+    if (!fs.existsSync(batchFile)) {
+      console.log(`错误: 任务文件 "${batchFile}" 不存在`);
+      process.exit(1);
+    }
+
+    let tasks;
+    try {
+      tasks = JSON.parse(fs.readFileSync(batchFile, 'utf-8'));
+    } catch (e) {
+      console.log(`错误: 无法解析 "${batchFile}"，请确保是合法 JSON 文件`);
+      process.exit(1);
+    }
+
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+      console.log('错误: 任务清单必须是非空数组');
+      process.exit(1);
+    }
+
+    for (const t of tasks) {
+      if (!t.object || !t.object.trim()) {
+        console.log('错误: 每个任务必须包含 "object" 字段');
+        process.exit(1);
+      }
+    }
+
+    return { tasks, isBatch: true };
+  }
+
+  const objectName = argv[2];
+  if (!objectName || !objectName.trim()) {
+    console.log('用法: node tools/form-analyzer/index.js <对象名称>');
+    console.log('用法: node tools/form-analyzer/index.js --batch <任务清单.json>');
+    console.log();
+    console.log('环境变量:');
+    console.log('  AKSO_BASE_URL    Akso 系统地址（如 https://xxx.aksoegmp.com）');
+    console.log('  AKSO_USERNAME    登录用户名');
+    console.log('  AKSO_PASSWORD    登录密码');
+    console.log('  AKSO_LAYOUT_NAME 指定表单布局名称（多个布局时推荐）');
+    console.log();
+    console.log('未设置的环境变量将在运行时交互式询问。');
+    process.exit(1);
+  }
+
+  const layoutName = process.env.AKSO_LAYOUT_NAME;
+
+  return {
+    tasks: [{ object: objectName.trim(), layout: layoutName || undefined }],
+    isBatch: false
+  };
+}
+
+function generateExcel(allRows, sheetName) {
+  const headers = ['表单名称', '部分名称', '字段名称', '字段类型', '关联对象/选项集', '备注'];
+  if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...allRows]);
+  ws['!cols'] = [{ wch: 22 }, { wch: 18 }, { wch: 26 }, { wch: 12 }, { wch: 22 }, { wch: 45 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+  const fp = path.join(OUTPUT_DIR, `${sheetName}_${ts}.xlsx`);
+  XLSX.writeFile(wb, fp);
+  return fp;
+}
+
+async function runOneTask(page, task) {
+  const objectName = task.object;
+  const preferredLayout = task.layout;
+
+  console.log(`\n${'─'.repeat(50)}`);
+  console.log(`  任务: ${objectName}${preferredLayout ? ` → ${preferredLayout}` : ''}`);
+  console.log(`${'─'.repeat(50)}\n`);
+
+  const { id: objectId, name: foundName } = await findObject(page, objectName);
+  const { items: fields, fieldMap } = await getFields(page, objectId);
+  const { layouts } = await discoverAndQueryLayouts(page, objectId);
+  const selected = selectLayout(layouts, preferredLayout);
+
+  const allRows = [];
+
+  for (const layout of selected) {
+    const detail = await getLayoutDetail(page, layout.id, objectId, layout.name);
+    const sectionMap = {};
+    for (const s of (detail.sections || [])) sectionMap[s.id] = s.name;
+
+    const { rows } = assembleRows(layout.name, sectionMap, detail.controls || [], detail.sections, fieldMap);
+    allRows.push(...rows);
+  }
+
+  if (allRows.length === 0) {
+    console.log('[Phase E] 布局无数据，降级输出全部字段...');
+    const layoutName = selected[0]?.name || '(无布局)';
+    for (const f of fields) {
+      const typeName = TYPE_MAP[f.dataType] || '';
+      const ri = extractRelatedInfo(f);
+      allRows.push([layoutName, '', f.name, typeName, ri.relatedName, ri.remark]);
+    }
+  }
+
+  console.log(`\n[Phase D] 生成 Excel...`);
+  const sheetName = foundName.replace(/[\\\/\*\?\[\]:]/g, '_').substring(0, 31);
+  const fp = generateExcel(allRows, sheetName);
+
+  console.log(`  完成! ${fp}`);
+  console.log(`  共 ${allRows.length} 行数据`);
+
+  return { objectName, foundName, fp, rowCount: allRows.length, ok: true };
 }
 
 async function main() {
-  const resolvedConfig = await resolveConfig();
-  const { objectName, baseUrl, username, password, layoutName: envLayoutName } = resolvedConfig;
-
-  console.log(`========================================`);
-  console.log(`  表单字段分析: ${objectName}`);
-  console.log(`  环境: ${baseUrl}`);
-  console.log(`========================================\n`);
+  const { tasks, isBatch } = resolveTasks(process.argv);
+  const { baseUrl, username, password } = await resolveEnv();
 
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -410,58 +505,44 @@ async function main() {
   const page = await context.newPage();
   page.__baseUrl = baseUrl;
 
+  const results = [];
+
   try {
     await login(page, { baseUrl, username, password });
 
-    const { id: objectId, name: foundName } = await findObject(page, objectName);
-    const { items: fields, fieldMap } = await getFields(page, objectId);
-    const { layouts } = await discoverAndQueryLayouts(page, objectId);
-    const selected = selectLayout(layouts, envLayoutName);
-
-    const allRows = [];
-    const headers = ['表单名称', '部分名称', '字段名称', '字段类型', '关联对象/选项集', '备注'];
-    const allUsedFields = new Set();
-
-    for (const layout of selected) {
-      const detail = await getLayoutDetail(page, layout.id, objectId, layout.name);
-      const sectionMap = {};
-      for (const s of (detail.sections || [])) sectionMap[s.id] = s.name;
-
-      const { rows, usedFields } = assembleRows(layout.name, sectionMap, detail.controls || [], detail.sections, fieldMap);
-      allRows.push(...rows);
-      usedFields.forEach(id => allUsedFields.add(id));
-    }
-
-    if (allRows.length === 0) {
-      console.log('[Phase E] 布局无数据，降级输出全部字段...');
-      const layoutName = selected[0]?.name || '(无布局)';
-      for (const f of fields) {
-        const typeName = TYPE_MAP[f.dataType] || '';
-        const ri = extractRelatedInfo(f);
-        allRows.push([layoutName, '', f.name, typeName, ri.relatedName, ri.remark]);
+    for (const task of tasks) {
+      try {
+        const result = await runOneTask(page, task);
+        results.push(result);
+      } catch (error) {
+        console.log(`\n  [失败] ${task.object}: ${error.message}`);
+        results.push({ objectName: task.object, foundName: '', fp: '', rowCount: 0, ok: false, error: error.message });
       }
     }
-
-    console.log(`\n[Phase D] 生成 Excel...`);
-    const sheetName = foundName.replace(/[\\\/\*\?\[\]:]/g, '_').substring(0, 31);
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...allRows]);
-    ws['!cols'] = [{ wch: 22 }, { wch: 18 }, { wch: 26 }, { wch: 12 }, { wch: 22 }, { wch: 45 }];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
-    const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-    const fp = path.join(OUTPUT_DIR, `${sheetName}_${ts}.xlsx`);
-    XLSX.writeFile(wb, fp);
-
-    console.log(`========================================`);
-    console.log(`  完成! ${fp}`);
-    console.log(`  共 ${allRows.length} 行数据`);
-    console.log(`========================================`);
   } catch (error) {
     console.error(`\n[ERROR] ${error.message}`);
     process.exit(1);
   } finally {
     await browser.close();
   }
+
+  const succeeded = results.filter(r => r.ok);
+  const failed = results.filter(r => !r.ok);
+
+  console.log(`\n${'═'.repeat(50)}`);
+  console.log(`  批量导出完成`);
+  console.log(`  成功: ${succeeded.length}/${results.length}`);
+  console.log(`${'═'.repeat(50)}`);
+
+  for (const r of succeeded) {
+    console.log(`  ✅ ${r.fp} (${r.rowCount} 行)`);
+  }
+  for (const r of failed) {
+    console.log(`  ❌ ${r.objectName}: ${r.error || '未知错误'}`);
+  }
+  console.log(`${'═'.repeat(50)}\n`);
+
+  if (failed.length > 0) process.exit(1);
 }
 
 main();

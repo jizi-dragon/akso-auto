@@ -1,17 +1,17 @@
 ---
 name: akso-basic-config-api
 display_name: "Akso eGMP 基础配置 — API 直调版"
-description: "Akso eGMP 系统基础配置 Skill — API 直调版（Phase 2）。通过 HTTP API 直接创建对象、字段（14/16种类型）、选项集、表单布局、列表布局、生命周期状态，比 DOM 模式快 40x。执行引擎：browser_run_code_unsafe + page.evaluate(fetch)。内置 15s 自动刷新可视模式。覆盖 10 个模块共 12 个核心 API + 8 个待验证 API。"
+description: "Akso eGMP 系统基础配置 Skill — API 直调版（Phase 2）。通过 HTTP API 直接创建对象、字段（14/16种类型）、选项集、表单布局、列表布局、生命周期状态，比 DOM 模式快 40x。执行引擎：browser_run_code_unsafe + page.evaluate(fetch)。内置 15s 自动刷新可视模式。覆盖 10 个模块共 12 核心 API + 8 待验证 API + 5 个 OpenAPI 查询接口。"
 description_zh: "Akso eGMP 基础配置 API 版：通过 HTTP 直调创建对象/字段/选项集/布局/生命周期状态，内置可视刷新，极速配置"
 skill_role: executor_api
-version: 0.3.0
+version: 0.3.1
 allowed-tools: Bash, Read, Write, Skill, WebFetch
 agent_created: true
 ---
 
 # Akso eGMP 基础配置 — API 直调版 (Phase 2)
 
-> **版本**：v0.3.0 — Phase 2 重构（章节对齐 + 成熟度标注）  
+> **版本**：v0.3.1 — Phase 2 重构（章节对齐 + 成熟度标注）  
 > **适用对象**：WorkBuddy AI Agent  
 > **执行入口**：Playwright MCP `browser_run_code_unsafe` → `page.evaluate(fetch)`  
 > **原则**：登录走浏览器 DOM，配置走 HTTP API。一次登录，全程 API 直调。  
@@ -136,6 +136,16 @@ await page.evaluate(() => {
 | `500` | 业务错误（message 含描述）|
 | 非 200 | 网络/认证错误 |
 
+| code | 含义 | 来源 |
+|------|------|------|
+| `0` | 成功 | — |
+| `500` | 业务错误（message 含描述）| — |
+| `401` | 无权限/令牌过期 | 标准API文档 §3.4 |
+| `403` | 未访问到 | 标准API文档 §3.4 |
+| `518` | 配置迁移中 | 标准API文档 §3.4 |
+| `1000` | 参数验证错误 | 标准API文档 §3.4 |
+| `10000` | 授权码无效 | 标准API文档 §3.4 |
+
 ---
 
 ## 一、认证模块（DOM 模式前置）
@@ -210,6 +220,8 @@ POST /api/platform/BasicObject/SaveBasicObject
 
 **获取 objectId**：创建对象后 navigate 到对象列表 → 从 DOM 或 URL 参数 `?id=` 提取。
 
+> 💡 **获取 objectId**：SaveBasicObject 不返回 objectId。创建对象后，使用 [§11.1 获取对象信息](#111-获取对象信息) 通过 code 反查 objectId 和 lifecycleId。
+
 ---
 
 ## 三、⭐ 选项集 — ObjectPicklist/save
@@ -235,6 +247,8 @@ POST /api/platform/ObjectPicklist/save
 | `options[].status` | `1`=启用 |
 | `options[].operations` | `1`=允许操作 |
 | `options[].sort` | 排序序号（从 0 开始） |
+
+> 💡 **验证选项集**：创建选项集后，使用 [§11.3 查询选项集选项值](#113-查询选项集选项值) 验证选项值是否正确。
 
 ---
 
@@ -320,6 +334,8 @@ POST /api/platform/BasicObject/FieldPage
 请求：{ objectId, pageIndex:1, pageSize:50, filters:{} }
 响应：data.items[] 含 id/name/code/dataType/picklistId 等 50+ 属性
 ```
+
+> 💡 **验证字段**：创建字段后，使用 [§11.2 查询字段列表](#112-查询字段列表) 验证字段数量和名称是否符合预期。
 
 ---
 
@@ -462,6 +478,8 @@ POST /api/config/lifecycle/Status/Create
 | 阶段组配置 | ❌ 待探索 | `/admin/config/stage-group`，API 未捕获 |
 | 对象生命周期整体保存 | ❌ 待探索 | 画布级别的整体保存 API（含所有状态+连线+动作） |
 
+> 💡 **验证状态**：创建生命周期状态后，使用 [§11.4 查询生命周期状态](#114-查询生命周期状态) 验证状态列表是否完整。
+
 ---
 
 ## 八、工作流（API 探索）
@@ -532,25 +550,25 @@ POST /api/config/lifecycle/Status/Create
 
 ### 10.1 API 成熟度总览（按模块）
 
-| 配置项 | API | 成熟度 | 说明 |
-|--------|-----|--------|------|
-| 对象创建 | SaveBasicObject | ✅ 已支持 | 请求/响应格式完整确认 |
-| 字段创建 | SaveField (14/16) | ✅ 已支持 | dataType 矩阵完整，3 种类型待补 |
-| 字段查询 | FieldPage | ✅ 已支持 | 分页查询 |
-| 选项集 | ObjectPicklist/save | ✅ 已支持 | 含选项值批量创建 |
-| 表单布局 | SaveLayoutDetail | ✅ 已支持 | 含 section + control 完整结构 |
-| 列表布局 | Listlayout/Save + AddColumns | ✅ 已支持 | 两步创建 |
-| 生命周期状态 | Status/Create | ✅ 已支持 | 创建状态节点 |
-| 生命周期 8 个查询 | LifecycleRole/Get 等 | ⚠️ 待验证 | API 路径已捕获，参数/响应未确认 |
-| Token 刷新 | RefreshToken | ⚠️ 待验证 | `{ "fp": "固定指纹" }` |
-| 生命周期状态连线 | 未知 | ❌ 待探索 | 需 Network 面板录制 |
-| 生命周期用户动作 | 未知 | ❌ 待探索 | 创建提交/审批/退回等动作 |
-| 生命周期阶段组 | 未知 | ❌ 待探索 | `/admin/config/stage-group` |
-| 工作流创建 | 未知 | ❌ 待探索 | 含节点、连线、激活 |
-| 工作流节点 | 未知 | ❌ 待探索 | 参与者/任务/判断/通知/签名 |
-| 菜单创建 | 未知 | ❌ 待探索 | MenuGroup/QueryList 已知 |
-| 权限集/字段安全 | 未知 | ❌ 待探索 | 含权限集、字段安全、角色分配 |
-| 删除/禁用操作 | 未知 | ❌ 待探索 | 对象/字段/选项集等的删除 API |
+| 配置项 | API | 成熟度 | 说明 | 查询验证 API |
+|--------|-----|--------|------|-------------|
+| 对象创建 | SaveBasicObject | ✅ 已支持 | 请求/响应格式完整确认 | `getObjectInfo(code)` |
+| 字段创建 | SaveField (14/16) | ✅ 已支持 | dataType 矩阵完整，3 种类型待补 | `getFieldList(objCode)` |
+| 字段查询 | FieldPage | ✅ 已支持 | 分页查询 | — |
+| 选项集 | ObjectPicklist/save | ✅ 已支持 | 含选项值批量创建 | `getPicklistOptions(code)` |
+| 表单布局 | SaveLayoutDetail | ✅ 已支持 | 含 section + control 完整结构 | — |
+| 列表布局 | Listlayout/Save + AddColumns | ✅ 已支持 | 两步创建 | — |
+| 生命周期状态 | Status/Create | ✅ 已支持 | 创建状态节点 | `getLifecycleStatus(objCode)` |
+| 生命周期 8 个查询 | LifecycleRole/Get 等 | ⚠️ 待验证 | API 路径已捕获，参数/响应未确认 | — |
+| Token 刷新 | RefreshToken | ⚠️ 待验证 | `{ "fp": "固定指纹" }` | — |
+| 生命周期状态连线 | 未知 | ❌ 待探索 | 需 Network 面板录制 | — |
+| 生命周期用户动作 | 未知 | ❌ 待探索 | 创建提交/审批/退回等动作 | — |
+| 生命周期阶段组 | 未知 | ❌ 待探索 | `/admin/config/stage-group` | — |
+| 工作流创建 | 未知 | ❌ 待探索 | 含节点、连线、激活 | — |
+| 工作流节点 | 未知 | ❌ 待探索 | 参与者/任务/判断/通知/签名 | — |
+| 菜单创建 | 未知 | ❌ 待探索 | MenuGroup/QueryList 已知 | — |
+| 权限集/字段安全 | 未知 | ❌ 待探索 | 含权限集、字段安全、角色分配 | — |
+| 删除/禁用操作 | 未知 | ❌ 待探索 | 对象/字段/选项集等的删除 API | — |
 
 > 💡 **可视模式提示**：API 批量操作期间，先 navigate 到目标模块页面再开启 15s 自动刷新，操作完成后可直观验证结果。
 
@@ -657,6 +675,121 @@ async (page) => {
 - 权限：权限集、字段级安全、角色权限分配
 - 删除/禁用操作
 
+### 🔍 可验证（OpenAPI）
+
+| 功能 | 查询 API | 说明 |
+|------|----------|------|
+| 对象信息 | `GET /api/openapi/v1.0/BasicObject/{code}` | 返回 objectId/lifecycleId/enableLifeCycle |
+| 字段列表 | `GET /api/openapi/v1.0/BasicObject/field/{objCode}` | 返回字段数组（含 name/code/dataType/id） |
+| 选项集详情 | `GET /api/openapi/v1.0/BasicObject/picklist/{code}` | 返回选项值数组 |
+| 生命周期状态 | `GET /api/openapi/v1.0/BasicObject/lifecycleStatus/{objCode}` | 返回状态数组 |
+| Token 认证 | `POST /api/openapi/v1.0/Auth` | ⚠️ 明文密码，备用方案 |
+
+---
+
+## 十一、OpenAPI 查询辅助层（基于标准API文档-V1.0）
+
+> **适用场景**：配置后的查询验证、对象/字段 ID 获取、选项集验证。  
+> **与管理端 API 的区别**：管理端 API（/api/platform/...、/api/config/...）用于**创建/修改**配置；OpenAPI（/api/openapi/v1.0/...）用于**查询/验证**已有配置。  
+> **完整文档**：external_reference_resources/标准API文档-V1.0.md
+
+### 11.1 获取对象信息（解决 objectId 获取痛点）
+
+| 项目 | 内容 |
+|------|------|
+| 路由 | `GET /api/openapi/v1.0/BasicObject/{code}` |
+| 文档来源 | 标准API文档 §4.8 |
+| 核心用途 | 通过对象 Code 反查 objectId、lifecycleId |
+
+**请求示例**：
+
+```javascript
+// browser_run_code_unsafe
+async (page) => {
+  const result = await page.evaluate(async () => {
+    const { getObjectInfo } = window.__aksoAPI;
+    return await getObjectInfo('change_control__c');
+  });
+  // result.objectId → UUID，用于后续字段创建
+  // result.lifecycleId → UUID，用于生命周期配置
+  // result.enableLifeCycle → bool
+  return result;
+}
+```
+
+### 11.2 查询字段列表
+
+| 项目 | 内容 |
+|------|------|
+| 路由 | `GET /api/openapi/v1.0/BasicObject/field/{objectCode}/{fieldCode?}` |
+| 文档来源 | 标准API文档 §4.6 |
+| 核心用途 | 查询已创建的字段，验证字段创建结果 |
+
+```javascript
+const { getFieldList, log } = window.__aksoAPI;
+const r = await getFieldList('change_control__c');
+log('字段查询', { success: r.success, message: r.count + ' 个字段' });
+```
+
+### 11.3 查询选项集选项值
+
+| 项目 | 内容 |
+|------|------|
+| 路由 | `GET /api/openapi/v1.0/BasicObject/picklist/{code}` |
+| 文档来源 | 标准API文档 §4.7 |
+| 核心用途 | 验证选项集和选项值是否创建正确 |
+
+```javascript
+const { getPicklistOptions } = window.__aksoAPI;
+const r = await getPicklistOptions('option_change_type');
+// r.items → [{ id, name, code, sort, status }]
+```
+
+### 11.4 查询生命周期状态
+
+| 项目 | 内容 |
+|------|------|
+| 路由 | `GET /api/openapi/v1.0/BasicObject/lifecycleStatus/{objectCode}` |
+| 文档来源 | 标准API文档 §4.5 |
+| 核心用途 | 通过对象 Code 查询其全部生命周期状态 |
+
+```javascript
+const { getLifecycleStatus } = window.__aksoAPI;
+const r = await getLifecycleStatus('change_control__c');
+// r.items → [{ id, code, name, lifecycleId }]
+```
+
+### 11.5 备用 Token 认证（纯 API 模式）
+
+> ⚠️ **安全警告**：此接口使用明文密码传输，仅用于内部自动化场景。生产环境建议继续使用 DOM 登录 + cookie token。
+
+| 项目 | 内容 |
+|------|------|
+| 路由 | `POST /api/openapi/v1.0/Auth` |
+| 文档来源 | 标准API文档 §4.1 |
+| 有效期 | 60 分钟 |
+| Body | `{ "account": "用户名", "password": "密码" }` |
+
+```javascript
+const { getOpenApiToken } = window.__aksoAPI;
+const r = await getOpenApiToken('账号', '密码');
+if (r.success) {
+  // r.token → JWT 字符串，可用于 Authorization: Bearer 头
+}
+```
+
+### 11.6 OpenAPI 错误码速查
+
+| 错误码 | 描述 | 处理建议 |
+|--------|------|----------|
+| 0 | 成功 | — |
+| 401 | 无权限/登录过期 | 重新获取 token |
+| 403 | 未访问到 | 检查路由和权限 |
+| 500 | 统一错误 | 查看 message 详情 |
+| 518 | 配置迁移 | 等待迁移完成 |
+| 1000 | 参数验证错误 | 检查参数格式 |
+| 10000 | 授权码无效 | 检查账号密码 |
+
 ---
 
 ## 附录：API 路径速查
@@ -684,10 +817,16 @@ async (page) => {
 | 📋 Query | `/platform/MenuGroup/QueryList` | 菜单组 | ⚠️ |
 | 📋 Query | `/platform/biz/basicobject/FieldsByCodes` | 字段查询 | ⚠️ |
 | 📋 Query | `/platform/BasicObjectAction/QueryList` | 对象动作 | ⚠️ |
+| 📋 OpenAPI | `/api/openapi/v1.0/BasicObject/{code}` | 获取对象信息 | ✅ |
+| 📋 OpenAPI | `/api/openapi/v1.0/BasicObject/field/{objCode}` | 获取字段列表 | ✅ |
+| 📋 OpenAPI | `/api/openapi/v1.0/BasicObject/picklist/{code}` | 获取选项集 | ✅ |
+| 📋 OpenAPI | `/api/openapi/v1.0/BasicObject/lifecycleStatus/{objCode}` | 获取生命周期状态 | ✅ |
+| 🔑 OpenAPI | `/api/openapi/v1.0/Auth` | 获取访问令牌（备用） | ✅ |
 
 ---
 
-> **版本**：v0.3.0  
-> **更新**：章节编号对齐 DOM 版（零~十）+ 成熟度三级标注（✅/⚠️/❌）+ 生命周期 8 个查询 API 升级 + 新增工作流/菜单/权限 API 探索章节 + 执行策略三级成熟度总览表  
+> **版本**：v0.3.1  
+> **更新**：新增 §十一 OpenAPI 查询辅助层（5 个 OpenAPI 查询接口）+ 各模块查询验证指引 + §10.1 查询验证 API 列 + 能力边界/附录/错误码扩展  
+> **日期**：2026-07-13  
 > **数据来源**：2026-07-08 API 录制（Phase 1: 20 POST + Phase 2: 16 新增）  
 > **测试环境**：standard-val.aksoegmp.com

@@ -56,7 +56,18 @@ async (page) => {
 ## 步骤 3：获取对象 ID
 
 ```javascript
-// 方式：导航到对象列表，从页面元素中获取
+// 方式 A（推荐）：用 OpenAPI 查询接口获取 ID
+// browser_run_code_unsafe
+async (page) => {
+  const objInfo = await page.evaluate(async () => {
+    const { getObjectInfo } = window.__aksoAPI;
+    return await getObjectInfo('变更控制对应的code__c');
+  });
+  return { objectId: objInfo.objectId, lifecycleId: objInfo.lifecycleId };
+}
+// → { objectId: 'uuid...', lifecycleId: 'uuid...' }
+
+// 方式 B（备选）：导航到对象列表，从页面元素中获取
 // browser_navigate → /admin/config/basic-objects/list
 // 然后在页面上找到刚创建的对象，点击进入，URL 中的 ?id= 就是 objectId
 
@@ -173,3 +184,31 @@ Phase 1 最明显的短板是 **ID 链路**：
 **Phase 2 改进方向**：
 - 实现对象查询 API 调用（如果存在）
 - 或者用 page.evaluate 脚本快速从表格提取 ID
+
+---
+
+## 步骤 6：验证配置结果（OpenAPI 查询辅助）
+
+```javascript
+// browser_run_code_unsafe — 用 OpenAPI 查询接口验证创建结果
+async (page) => {
+  const results = await page.evaluate(async () => {
+    const { getObjectInfo, getFieldList, getPicklistOptions, getLifecycleStatus, log } = window.__aksoAPI;
+    
+    // 1. 验证对象创建 + 获取 objectId
+    const obj = await getObjectInfo('change_control__c');
+    log('对象查询', { success: obj.success, objectId: obj.objectId, lifecycleId: obj.lifecycleId });
+    
+    // 2. 验证字段列表
+    const fields = await getFieldList('change_control__c');
+    log('字段查询', { success: fields.success, count: fields.count });
+    
+    // 3. 验证生命周期状态
+    const statuses = await getLifecycleStatus('change_control__c');
+    log('状态查询', { success: statuses.success, count: statuses.count });
+    
+    return { obj, fields, statuses };
+  });
+  return results;
+}
+```

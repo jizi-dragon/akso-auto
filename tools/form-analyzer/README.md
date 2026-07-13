@@ -1,4 +1,4 @@
-﻿# form-analyzer — AI Agent 使用说明
+# form-analyzer — AI Agent 使用说明
 
 ## 用途
 
@@ -51,6 +51,50 @@ $env:AKSO_LAYOUT_NAME='默认布局'
 node tools/form-analyzer/index.js "CAPA"
 ```
 
+## 批量模式
+
+一次导出多个对象的表单信息，登录一次、复用 session。
+
+### 任务清单文件
+
+创建 JSON 文件（如 `tasks.json`）：
+
+```json
+[
+  { "object": "CAPA", "layout": "默认布局" },
+  { "object": "偏差管理_lyl_aa" },
+  { "object": "变更控制", "layout": "默认布局" }
+]
+```
+
+| 字段 | 必填 | 说明 |
+|------|:--:|------|
+| `object` | ✅ | 对象中文名称 |
+| `layout` | ❌ | 布局名称。单布局对象自动选择；多布局对象必须指定 |
+
+### 执行
+
+```bash
+node tools/form-analyzer/index.js --batch tasks.json
+```
+
+每个 `{object, layout}` 组合生成一份独立 Excel 文件，命名格式不变。
+
+### 批量输出示例
+
+```
+══════════════════════════════════════════════
+  批量导出完成
+  成功: 3/3
+══════════════════════════════════════════════
+  ✅ output/CAPA_2026-07-10T12-00-00.xlsx (47 行)
+  ✅ output/偏差管理_lyl_aa_2026-07-10T12-00-10.xlsx (25 行)
+  ✅ output/变更控制_2026-07-10T12-00-20.xlsx (18 行)
+══════════════════════════════════════════════
+```
+
+失败的任务会标记 ❌，不影响后续任务继续执行。
+
 ## 输出
 
 - 输出目录: `output/`
@@ -93,7 +137,28 @@ node tools/form-analyzer/index.js "CAPA"
   - 布局名称（若对象只有一个布局则自动选择）
 ```
 
+### 步骤 2.5：判断批量/单对象
+
+根据用户需求：
+
+| 用户表述 | 判定 | 操作 |
+|---------|------|------|
+| "CAPA" | 单个对象 | 直接执行步骤 3（单对象） |
+| "CAPA 和偏差" | 多个对象 | 执行步骤 3（批量） |
+| "一些对象"/"几个表单" | 模糊 | **主动追问**，列出确认后再执行 |
+
+如果用户需求模糊，追问：
+
+```
+请确认要导出哪些对象（对象名 + 布局名，布局名可省略）：
+  例如：
+  - CAPA → 默认布局
+  - 偏差管理_lyl_aa
+```
+
 ### 步骤 3：设置环境变量并执行
+
+**单对象**：
 
 ```powershell
 $env:AKSO_BASE_URL='<用户提供的地址>'
@@ -101,6 +166,24 @@ $env:AKSO_USERNAME='<用户提供的账号>'
 $env:AKSO_PASSWORD='<用户提供的密码>'
 $env:AKSO_LAYOUT_NAME='<用户选择的布局>'
 node tools/form-analyzer/index.js "<对象名称>"
+```
+
+**批量**：先生成 `tasks.json`：
+
+```json
+[
+  { "object": "CAPA", "layout": "默认布局" },
+  { "object": "偏差管理_lyl_aa" }
+]
+```
+
+再执行：
+
+```powershell
+$env:AKSO_BASE_URL='...'
+$env:AKSO_USERNAME='...'
+$env:AKSO_PASSWORD='...'
+node tools/form-analyzer/index.js --batch tasks.json
 ```
 
 ### 步骤 4：清除凭证

@@ -207,14 +207,125 @@ async function createLifecycleStatus({ lifecycleId, name, code, isEnabled = true
 }
 
 // ============================================================================
-// 8. 认证
+// 8. OpenAPI 查询辅助层（基于标准API文档-V1.0）
 // ============================================================================
 
-async function refreshToken() {
-  const resp = await apiPost('/api/auth/Oauth/RefreshToken', {
-    fp: '0faf60287d99b5c86a8a7d4b239ffb02'
+const OPENAPI_BASE = '/api/openapi/v1.0';
+
+/** 错误码对照表（来源：标准API文档 §3.4） */
+const ERROR_CODES = {
+  0: '成功',
+  401: '无权限/登录过期',
+  403: '未访问到',
+  500: '统一错误',
+  518: '配置迁移',
+  1000: '参数验证错误',
+  10000: '授权码无效'
+};
+
+/**
+ * 备用认证：通过 OpenAPI 获取 JWT 令牌（60 分钟有效期）
+ * ⚠️ 明文密码传输，仅用于内部自动化场景
+ * 文档：标准API文档-V1.0 §4.1
+ */
+async function getOpenApiToken(account, password) {
+  const resp = await fetch(BASE + OPENAPI_BASE + '/Auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account, password })
   });
-  return { success: isSuccess(resp), token: resp.data, result: resp };
+  const json = await resp.json();
+  return {
+    success: json.code === 0,
+    token: json.code === 0 ? json.data : null,
+    message: json.message || ERROR_CODES[json.code] || '未知错误',
+    result: json
+  };
+}
+
+/**
+ * 获取对象信息（含 objectId、lifecycleId）
+ * 文档：标准API文档-V1.0 §4.8
+ */
+async function getObjectInfo(objectCode) {
+  const token = getAuthToken();
+  const resp = await fetch(BASE + OPENAPI_BASE + '/BasicObject/' + objectCode, {
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + token }
+  });
+  const json = await resp.json();
+  return {
+    success: json.code === 0,
+    objectId: json.code === 0 ? json.data?.id : null,
+    lifecycleId: json.code === 0 ? json.data?.lifeCycleId : null,
+    enableLifeCycle: json.code === 0 ? json.data?.enableLifeCycle : null,
+    data: json.data || {},
+    message: json.message || ERROR_CODES[json.code] || '未知错误',
+    result: json
+  };
+}
+
+/**
+ * 查询对象字段列表
+ * 文档：标准API文档-V1.0 §4.6
+ */
+async function getFieldList(objectCode, fieldCode) {
+  const token = getAuthToken();
+  const path = fieldCode
+    ? OPENAPI_BASE + '/BasicObject/field/' + objectCode + '/' + fieldCode
+    : OPENAPI_BASE + '/BasicObject/field/' + objectCode;
+  const resp = await fetch(BASE + path, {
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + token }
+  });
+  const json = await resp.json();
+  return {
+    success: json.code === 0,
+    items: json.data || [],
+    count: (json.data || []).length,
+    message: json.message || ERROR_CODES[json.code] || '未知错误',
+    result: json
+  };
+}
+
+/**
+ * 查询选项集选项值
+ * 文档：标准API文档-V1.0 §4.7
+ */
+async function getPicklistOptions(code) {
+  const token = getAuthToken();
+  const resp = await fetch(BASE + OPENAPI_BASE + '/BasicObject/picklist/' + code, {
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + token }
+  });
+  const json = await resp.json();
+  return {
+    success: json.code === 0,
+    items: json.data || [],
+    count: (json.data || []).length,
+    message: json.message || ERROR_CODES[json.code] || '未知错误',
+    result: json
+  };
+}
+
+/**
+ * 查询对象生命周期状态
+ * 文档：标准API文档-V1.0 §4.5
+ */
+async function getLifecycleStatus(objectCode) {
+  const token = getAuthToken();
+  const resp = await fetch(BASE + OPENAPI_BASE + '/BasicObject/lifecycleStatus/' + objectCode, {
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + token }
+  });
+  const json = await resp.json();
+  return {
+    success: json.code === 0,
+    items: json.data || [],
+    count: (json.data || []).length,
+    message: json.message || ERROR_CODES[json.code] || '未知错误',
+    result: json
+  };
 }
 
 // ============================================================================
@@ -240,6 +351,7 @@ window.__aksoAPI = {
   saveFormLayout, saveListLayout, addListColumns,
   // 生命周期
   createLifecycleStatus,
-  // 认证
-  refreshToken
+  // OpenAPI 查询辅助
+  getOpenApiToken, getObjectInfo, getFieldList, getPicklistOptions, getLifecycleStatus,
+  ERROR_CODES
 };
