@@ -1,17 +1,17 @@
 ---
 name: akso-basic-config-api
 display_name: "Akso eGMP 基础配置 — API 直调版"
-description: "Akso eGMP 系统基础配置 Skill — API 直调版（Phase 2）。通过 HTTP API 直接创建对象、字段（14/16种类型）、选项集、表单布局、列表布局、生命周期状态，比 DOM 模式快 40x。执行引擎：browser_run_code_unsafe + page.evaluate(fetch)。内置 15s 自动刷新可视模式。覆盖 10 个模块共 12 核心 API + 8 待验证 API + 5 个 OpenAPI 查询接口。"
+description: "Akso eGMP 系统基础配置 Skill — API 直调版（Phase 2）。通过 HTTP API 直接创建对象、字段（14/16种类型）、选项集、表单布局、列表布局、生命周期状态，比 DOM 模式快 40x。执行引擎：browser_run_code_unsafe + page.evaluate(fetch)。内置 15s 自动刷新可视模式。覆盖 10 个模块共 12 核心 API + 8 待验证 API + 5 OpenAPI + 4 探索路标。"
 description_zh: "Akso eGMP 基础配置 API 版：通过 HTTP 直调创建对象/字段/选项集/布局/生命周期状态，内置可视刷新，极速配置"
 skill_role: executor_api
-version: 0.3.1
+version: 0.4.0
 allowed-tools: Bash, Read, Write, Skill, WebFetch
 agent_created: true
 ---
 
 # Akso eGMP 基础配置 — API 直调版 (Phase 2)
 
-> **版本**：v0.3.1 — Phase 2 重构（章节对齐 + 成熟度标注）  
+> **版本**：v0.4.0 — Phase 2 重构（章节对齐 + 成熟度标注）  
 > **适用对象**：WorkBuddy AI Agent  
 > **执行入口**：Playwright MCP `browser_run_code_unsafe` → `page.evaluate(fetch)`  
 > **原则**：登录走浏览器 DOM，配置走 HTTP API。一次登录，全程 API 直调。  
@@ -476,6 +476,7 @@ POST /api/config/lifecycle/Status/Create
 |------|--------|------|
 | 用户动作创建 | ❌ 待探索 | 为状态添加"提交""审批通过""退回"等动作按钮 |
 | 阶段组配置 | ❌ 待探索 | `/admin/config/stage-group`，API 未捕获 |
+| 进入动作配置 | ❌ 待探索 | 状态进入时自动执行的操作（通知/更新字段/创建记录） |
 | 对象生命周期整体保存 | ❌ 待探索 | 画布级别的整体保存 API（含所有状态+连线+动作） |
 
 > 💡 **验证状态**：创建生命周期状态后，使用 [§11.4 查询生命周期状态](#114-查询生命周期状态) 验证状态列表是否完整。
@@ -505,6 +506,14 @@ POST /api/config/lifecycle/Status/Create
 | 工作流列表查询 | `/api/config/workflow/QueryList`（推测） | ❌ 待探索 |
 | 工作流节点查询 | `/api/config/workflow/Node/Get`（推测） | ❌ 待探索 |
 | 关联工作流查询 | `/config/power/LifestatusWorkflow/Get` | ⚠️ 待验证（见七.2） |
+
+### 8.1b 工作流与生命周期绑定 API ❌ 待探索
+工作流通过"触发条件 = 状态变更时 + 对象 + 生命周期动作"来绑定到生命周期。
+此绑定关系可能在两个位置创建：
+1. 工作流编辑器中设置触发条件（创建/更新工作流 API 中作为参数）
+2. 生命周期配置中关联工作流（状态属性面板）
+
+**探索步骤**：在 DOM Skill 指导下完成 DOM 操作（8.2 步骤 3），同时打开 DevTools Network 面板录制 POST 请求。重点关注请求体中出现的 lifecycleStatusId、userActionId、workflowId 等关联字段。
 
 ### 8.2 工作流设置 API ❌ 待探索
 
@@ -568,6 +577,7 @@ POST /api/config/lifecycle/Status/Create
 | 工作流节点 | 未知 | ❌ 待探索 | 参与者/任务/判断/通知/签名 | — |
 | 菜单创建 | 未知 | ❌ 待探索 | MenuGroup/QueryList 已知 | — |
 | 权限集/字段安全 | 未知 | ❌ 待探索 | 含权限集、字段安全、角色分配 | — |
+| 编号规则 | 未知 | ❌ 待探索 | 前缀+日期+流水号规则 | — |
 | 删除/禁用操作 | 未知 | ❌ 待探索 | 对象/字段/选项集等的删除 API | — |
 
 > 💡 **可视模式提示**：API 批量操作期间，先 navigate 到目标模块页面再开启 15s 自动刷新，操作完成后可直观验证结果。
@@ -673,6 +683,7 @@ async (page) => {
 - 工作流：创建节点/连线/激活、全局设置
 - 菜单：创建/编辑菜单、菜单集查询
 - 权限：权限集、字段级安全、角色权限分配
+- 编号规则：导航 /admin/config/code-rules/list → 创建 → 保存时录制 POST 请求（推测 API 路径：/api/platform/CodeRule/Save）
 - 删除/禁用操作
 
 ### 🔍 可验证（OpenAPI）
@@ -825,8 +836,8 @@ if (r.success) {
 
 ---
 
-> **版本**：v0.3.1  
-> **更新**：新增 §十一 OpenAPI 查询辅助层（5 个 OpenAPI 查询接口）+ 各模块查询验证指引 + §10.1 查询验证 API 列 + 能力边界/附录/错误码扩展  
+> **版本**：v0.4.0  
+> **更新**：新增 §十一 OpenAPI 查询辅助层（5 个 OpenAPI 查询接口）+ 各模块查询验证指引 + §10.1 查询验证 API 列 + 能力边界/附录/错误码扩展 + 4 个探索路标（编号规则、生命周期进入动作、工作流关联生命周期）  
 > **日期**：2026-07-13  
 > **数据来源**：2026-07-08 API 录制（Phase 1: 20 POST + Phase 2: 16 新增）  
 > **测试环境**：standard-val.aksoegmp.com
