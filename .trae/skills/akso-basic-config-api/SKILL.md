@@ -1,21 +1,22 @@
 ---
 name: akso-basic-config-api
 display_name: "Akso eGMP 基础配置 — API 直调版"
-description: "Akso eGMP 系统基础配置 Skill — API 直调版（Phase 2）。通过 HTTP API 直接创建对象、字段（14/16种类型）、选项集、表单布局、列表布局、生命周期状态，比 DOM 模式快 40x。执行引擎：browser_run_code_unsafe + page.evaluate(fetch)。内置 15s 自动刷新可视模式。覆盖 7 个模块共 12 个核心 API。"
+description: "Akso eGMP 系统基础配置 Skill — API 直调版（Phase 2）。通过 HTTP API 直接创建对象、字段（14/16种类型）、选项集、表单布局、列表布局、生命周期状态，比 DOM 模式快 40x。执行引擎：browser_run_code_unsafe + page.evaluate(fetch)。内置 15s 自动刷新可视模式。覆盖 10 个模块共 12 个核心 API + 8 个待验证 API。"
 description_zh: "Akso eGMP 基础配置 API 版：通过 HTTP 直调创建对象/字段/选项集/布局/生命周期状态，内置可视刷新，极速配置"
-version: 0.2.1
+skill_role: executor_api
+version: 0.3.0
 allowed-tools: Bash, Read, Write, Skill, WebFetch
 agent_created: true
 ---
 
 # Akso eGMP 基础配置 — API 直调版 (Phase 2)
 
-> **版本**：v0.2.1 — Phase 2 + 可视模式  
+> **版本**：v0.3.0 — Phase 2 重构（章节对齐 + 成熟度标注）  
 > **适用对象**：WorkBuddy AI Agent  
 > **执行入口**：Playwright MCP `browser_run_code_unsafe` → `page.evaluate(fetch)`  
 > **原则**：登录走浏览器 DOM，配置走 HTTP API。一次登录，全程 API 直调。  
 > **性能**：DOM 模式 2 分钟 → API 模式 3 秒（40x 提速）  
-> **覆盖**：7 个模块 / 12 个核心 API / 14 种字段类型  
+> **覆盖**：10 个模块 / 12 个核心 API（✅）+ 8 个待验证 API（⚠️）/ 14 种字段类型  
 > **环境信息**：存储于外部 `AksoGMP_配置环境清单.xlsx`，本 Skill 不含密码
 
 > 📂 **文件结构**：
@@ -185,20 +186,11 @@ browser_run_code_unsafe code：
 
 ---
 
-## 二、API 参考手册
+## 二、⭐ 对象 — SaveBasicObject
 
 > **Base URL**：`https://standard-val.aksoegmp.com`  
 > **所有请求**：`POST` + `Content-Type: application/json`  
 > **标注**：⭐ = 核心创建/保存接口
-
-### 2.1 认证
-
-| API | 说明 |
-|-----|------|
-| `POST /api/auth/Oauth/Login` | 登录（pwd 已 RSA 加密，走 DOM） |
-| `POST /api/auth/Oauth/RefreshToken` | Token 刷新：`{ "fp": "固定指纹" }` |
-
-### 2.2 ⭐ 对象 — SaveBasicObject
 
 ```
 POST /api/platform/BasicObject/SaveBasicObject
@@ -218,7 +210,35 @@ POST /api/platform/BasicObject/SaveBasicObject
 
 **获取 objectId**：创建对象后 navigate 到对象列表 → 从 DOM 或 URL 参数 `?id=` 提取。
 
-### 2.3 ⭐ 字段 — SaveField
+---
+
+## 三、⭐ 选项集 — ObjectPicklist/save
+
+```
+POST /api/platform/ObjectPicklist/save
+
+请求体：
+{
+  "name": "选项集名称",
+  "code": "picklist_code__c",
+  "options": [
+    { "name":"选项A","code":"a__c","status":1,"operations":1,"sort":0 },
+    { "name":"选项B","code":"b__c","status":1,"operations":1,"sort":1 }
+  ]
+}
+
+响应：{ code: 0, data: true }
+```
+
+| 参数 | 说明 |
+|------|------|
+| `options[].status` | `1`=启用 |
+| `options[].operations` | `1`=允许操作 |
+| `options[].sort` | 排序序号（从 0 开始） |
+
+---
+
+## 四、⭐ 字段 — SaveField
 
 ```
 POST /api/platform/BasicObject/SaveField
@@ -226,7 +246,7 @@ POST /api/platform/BasicObject/SaveField
 通用参数（所有类型）：
   name:              string   ✅ 字段中文名
   code:              string   ✅ __c 结尾
-  dataType:          int      ✅ 见 2.3.2 枚举表
+  dataType:          int      ✅ 见 4.1 枚举表
   objectId:          uuid     ✅ 所属对象 ID
   isRequired:        bool       必填
   invisible:         bool       隐藏
@@ -237,7 +257,7 @@ POST /api/platform/BasicObject/SaveField
 响应：{ code: 0, data: true }
 ```
 
-#### 2.3.2 完整 dataType 枚举（14/16 已确认）
+### 4.1 完整 dataType 枚举（14/16 已确认）
 
 | dataType | 字段类型 | 特有参数 | 状态 |
 |----------|---------|---------|------|
@@ -258,7 +278,7 @@ POST /api/platform/BasicObject/SaveField
 
 > ⚠️ 文件、自动编号、统计字段（3 种）待 Phase 3 补录。
 
-#### 2.3.3 各类型请求体示例
+### 4.2 各类型请求体示例
 
 **数字 (dataType=2)**：
 ```json
@@ -292,7 +312,7 @@ POST /api/platform/BasicObject/SaveField
 { "name":"计算结果","code":"calc_result__c","dataType":14,"objectId":"...","returnType":2,"formulaScript":null,"setDefaultValue":null, "statisticsArrange":{"id":1} }
 ```
 
-#### 2.3.4 字段列表查询
+### 4.3 字段列表查询
 
 ```
 POST /api/platform/BasicObject/FieldPage
@@ -301,31 +321,9 @@ POST /api/platform/BasicObject/FieldPage
 响应：data.items[] 含 id/name/code/dataType/picklistId 等 50+ 属性
 ```
 
-### 2.4 ⭐ 选项集 — ObjectPicklist/save
+---
 
-```
-POST /api/platform/ObjectPicklist/save
-
-请求体：
-{
-  "name": "选项集名称",
-  "code": "picklist_code__c",
-  "options": [
-    { "name":"选项A","code":"a__c","status":1,"operations":1,"sort":0 },
-    { "name":"选项B","code":"b__c","status":1,"operations":1,"sort":1 }
-  ]
-}
-
-响应：{ code: 0, data: true }
-```
-
-| 参数 | 说明 |
-|------|------|
-| `options[].status` | `1`=启用 |
-| `options[].operations` | `1`=允许操作 |
-| `options[].sort` | 排序序号（从 0 开始） |
-
-### 2.5 ⭐ 表单布局 — Layout/SaveLayoutDetail
+## 五、⭐ 表单布局 — Layout/SaveLayoutDetail
 
 ```
 POST /api/platform/Layout/SaveLayoutDetail
@@ -379,7 +377,9 @@ POST /api/platform/Layout/SaveLayoutDetail
 | `AKSelectorObjectMulti` | 对象多选 |
 | `AKFile` | 附件/文件 |
 
-### 2.6 ⭐ 列表布局 — Listlayout
+---
+
+## 六、⭐ 列表布局 — Listlayout
 
 ```
 -- 步骤1：创建列表布局
@@ -400,7 +400,11 @@ POST /api/platform/Listlayout/AddColumns
 响应：{ code: 0, data: true }
 ```
 
-### 2.7 ⭐ 生命周期状态 — Status/Create
+---
+
+## 七、生命周期（扩展）
+
+### 7.1 ⭐ 生命周期状态 — Status/Create ✅
 
 ```
 POST /api/config/lifecycle/Status/Create
@@ -422,24 +426,135 @@ POST /api/config/lifecycle/Status/Create
 
 > lifecycleId 在对象创建（勾选 enableLifeCycle）时由系统自动生成。从对象详情页 URL 提取：`/admin/config/lifecycle/{lifecycleId}?__edit=2`
 
-### 2.8 生命周期查询 API（已捕获，未深入）
+### 7.2 生命周期查询 API（8 个已捕获，⚠️ 待验证）
 
-| API | 用途 |
-|-----|------|
-| `POST /config/power/LifecycleRole/Get` | 角色 |
-| `POST /config/power/LifestatusUserAction/Get` | 用户动作 |
-| `POST /config/power/LifestatusRelation/Get` | 状态关联 |
-| `POST /config/power/LifestatusWorkflow/Get` | 关联工作流 |
-| `POST /config/power/LifestatusApproveMatrix/Get` | 审批矩阵 |
-| `POST /config/power/PowerSetLifeStatusObjectAction/Get` | 对象动作 |
-| `POST /config/power/LifestatusAffixField/Get` | 附件字段 |
-| `POST /config/power/LifestatusObjectField/Get` | 对象字段 |
+> ⚠️ 以下 API 已从浏览器 Network 面板捕获到请求路径，但**参数和响应格式未完全确认**。  
+> 调用前建议先用 `page.evaluate(fetch)` 试探性查询，根据响应调整请求体。
+
+| API | 用途 | 已知请求路径 |
+|-----|------|------------|
+| `POST /config/power/LifecycleRole/Get` | 角色查询 | ⚠️ 待验证 |
+| `POST /config/power/LifestatusUserAction/Get` | 用户动作查询 | ⚠️ 待验证 |
+| `POST /config/power/LifestatusRelation/Get` | 状态关联查询 | ⚠️ 待验证 |
+| `POST /config/power/LifestatusWorkflow/Get` | 关联工作流查询 | ⚠️ 待验证 |
+| `POST /config/power/LifestatusApproveMatrix/Get` | 审批矩阵查询 | ⚠️ 待验证 |
+| `POST /config/power/PowerSetLifeStatusObjectAction/Get` | 对象动作查询 | ⚠️ 待验证 |
+| `POST /config/power/LifestatusAffixField/Get` | 附件字段查询 | ⚠️ 待验证 |
+| `POST /config/power/LifestatusObjectField/Get` | 对象字段查询 | ⚠️ 待验证 |
+
+### 7.3 状态连线 API ❌ 待探索
+
+> **当前状态**：生命周期状态之间的连线（transition）API 尚未捕获。  
+> **探索方向**：在实时会话中进入「对象生命周期」页面 → 创建/"连接"两个状态 → 打开浏览器 DevTools Network 面板录制 `POST` 请求。  
+> **预期端点**：可能类似 `/api/config/lifecycle/StatusTransition/Create` 或 `/api/config/lifecycle/StatusRelation/Save`。  
+> **操作指引**：
+> 1. `browser_navigate` → `/admin/config/lifecycle`
+> 2. 点击目标生命周期 → 进入编辑画布
+> 3. 在画布上创建状态连线
+> 4. 在 `browser_run_code_unsafe` 外用 Playwright MCP 监听 Network 请求
+> 5. 录制到的 `POST` 请求即该 API 的请求模板
+
+### 7.4 其他生命周期待探索项
+
+| 功能 | 成熟度 | 说明 |
+|------|--------|------|
+| 用户动作创建 | ❌ 待探索 | 为状态添加"提交""审批通过""退回"等动作按钮 |
+| 阶段组配置 | ❌ 待探索 | `/admin/config/stage-group`，API 未捕获 |
+| 对象生命周期整体保存 | ❌ 待探索 | 画布级别的整体保存 API（含所有状态+连线+动作） |
 
 ---
 
-## 三、标准工作流
+## 八、工作流（API 探索）
 
-### 3.1 模块间依赖顺序
+> ⚠️ 工作流模块的 API 探索处于早期阶段。目前仅确认了查询端点，创建 API 尚未捕获。
+
+### 8.1 工作流创建 API ❌ 待探索
+
+> **当前状态**：工作流（Workflow）的创建/保存 API 尚未录制。  
+> **探索方式**：需要在实时浏览器会话中，通过 `browser_run_code_unsafe` 导航到工作流配置页面，配合 DevTools Network 面板录制 `POST` 请求。
+
+**探索步骤**：
+1. `browser_navigate` → `/admin/config/workflow`
+2. 点击「创建」按钮 → 填写名称/Code
+3. 从工具栏拖拽节点（参与者、任务、判断、通知、电子签名）到画布
+4. 用连线连接节点形成完整流程
+5. 点击「保存」（或「保存并激活」）时录制 Network 中的 `POST` 请求
+
+**已知工作流查询端点路标**：
+
+| API | 已知路径 | 成熟度 |
+|-----|---------|--------|
+| 工作流列表查询 | `/api/config/workflow/QueryList`（推测） | ❌ 待探索 |
+| 工作流节点查询 | `/api/config/workflow/Node/Get`（推测） | ❌ 待探索 |
+| 关联工作流查询 | `/config/power/LifestatusWorkflow/Get` | ⚠️ 待验证（见七.2） |
+
+### 8.2 工作流设置 API ❌ 待探索
+
+> 工作流全局设置页面 `/admin/config/workflow-setting` 的相关 API 未捕获。
+
+---
+
+## 九、菜单与权限（API 探索）
+
+### 9.1 菜单 API ❌ 待探索
+
+> **当前状态**：菜单（Menu）的创建/编辑 API 尚未录制。仅确认菜单组查询端点。
+
+**已知路径**：
+
+| API | 路径 | 成熟度 |
+|-----|------|--------|
+| 菜单组查询 | `POST /platform/MenuGroup/QueryList` | ⚠️ 待验证 |
+| 菜单创建 | 推测 `/api/platform/Menu/Save` 或类似路径 | ❌ 待探索 |
+| 菜单集查询 | 推测 `/api/platform/MenuCollection/QueryList` | ❌ 待探索 |
+
+**探索步骤**：
+1. `browser_navigate` → `/admin/config/menu-mgmt`
+2. 选择父菜单 → 点击「添加子菜单」
+3. 填写菜单名称、类型、关联对象、使用布局
+4. 点击「保存」时录制 Network 中的 `POST` 请求
+
+### 9.2 权限 API ❌ 待探索
+
+> **当前状态**：权限集（Permission Set）、字段级安全（Field Security）、动态权限控制等模块的 API 均未捕获。
+
+| 功能 | 路由页面 | 成熟度 |
+|------|---------|--------|
+| 权限集创建/编辑 | `/admin/config/permission-set`（推测） | ❌ 待探索 |
+| 字段安全配置 | `/admin/config/field-security`（推测） | ❌ 待探索 |
+| 角色权限分配 | `/admin/config/role-permission`（推测） | ❌ 待探索 |
+
+> 权限相关 API 需要在实时会话中通过 DevTools Network 面板录制，目前暂无可用端点。
+
+---
+
+## 十、执行策略
+
+### 10.1 API 成熟度总览（按模块）
+
+| 配置项 | API | 成熟度 | 说明 |
+|--------|-----|--------|------|
+| 对象创建 | SaveBasicObject | ✅ 已支持 | 请求/响应格式完整确认 |
+| 字段创建 | SaveField (14/16) | ✅ 已支持 | dataType 矩阵完整，3 种类型待补 |
+| 字段查询 | FieldPage | ✅ 已支持 | 分页查询 |
+| 选项集 | ObjectPicklist/save | ✅ 已支持 | 含选项值批量创建 |
+| 表单布局 | SaveLayoutDetail | ✅ 已支持 | 含 section + control 完整结构 |
+| 列表布局 | Listlayout/Save + AddColumns | ✅ 已支持 | 两步创建 |
+| 生命周期状态 | Status/Create | ✅ 已支持 | 创建状态节点 |
+| 生命周期 8 个查询 | LifecycleRole/Get 等 | ⚠️ 待验证 | API 路径已捕获，参数/响应未确认 |
+| Token 刷新 | RefreshToken | ⚠️ 待验证 | `{ "fp": "固定指纹" }` |
+| 生命周期状态连线 | 未知 | ❌ 待探索 | 需 Network 面板录制 |
+| 生命周期用户动作 | 未知 | ❌ 待探索 | 创建提交/审批/退回等动作 |
+| 生命周期阶段组 | 未知 | ❌ 待探索 | `/admin/config/stage-group` |
+| 工作流创建 | 未知 | ❌ 待探索 | 含节点、连线、激活 |
+| 工作流节点 | 未知 | ❌ 待探索 | 参与者/任务/判断/通知/签名 |
+| 菜单创建 | 未知 | ❌ 待探索 | MenuGroup/QueryList 已知 |
+| 权限集/字段安全 | 未知 | ❌ 待探索 | 含权限集、字段安全、角色分配 |
+| 删除/禁用操作 | 未知 | ❌ 待探索 | 对象/字段/选项集等的删除 API |
+
+> 💡 **可视模式提示**：API 批量操作期间，先 navigate 到目标模块页面再开启 15s 自动刷新，操作完成后可直观验证结果。
+
+### 10.2 模块间依赖顺序
 
 ```
 1. 登录（DOM）→ cookie
@@ -451,7 +566,7 @@ POST /api/config/lifecycle/Status/Create
 7. 创建生命周期状态 → 需要 lifecycleId
 ```
 
-### 3.2 一气呵成脚本（注入 api-helpers.js 后执行）
+### 10.3 一气呵成脚本（注入 api-helpers.js 后执行）
 
 ```javascript
 // browser_run_code_unsafe — 批量创建对象 + 字段 + 布局
@@ -483,29 +598,7 @@ async (page) => {
 }
 ```
 
----
-
-## 四、执行策略
-
-### 4.1 API vs DOM 模式选择
-
-| 场景 | 推荐 | 原因 |
-|------|------|------|
-| 登录 | ⚠️ DOM | 密码 RSA 加密 |
-| **登录 + 可视** | ⚠️ DOM | 追加 15s 自动刷新（见 1.3） |
-| 创建对象 | ✅ API | SaveBasicObject |
-| 创建字段（14 种） | ✅ API | dataType 矩阵完整 |
-| 创建选项集 | ✅ API | ObjectPicklist/save |
-| 表单布局 | ✅ API | SaveLayoutDetail |
-| 列表布局 | ✅ API | Listlayout/Save + AddColumns |
-| 生命周期状态 | ✅ API | Status/Create |
-| 生命周期动作 | ⚠️ DOM | API 待 Phase 3 补录 |
-| 工作流 | ⚠️ DOM | API 待 Phase 3 补录 |
-| 菜单 | ⚠️ DOM | API 待 Phase 3 补录 |
-
-> 💡 **可视模式提示**：API 批量操作期间，先 navigate 到目标模块页面再开启 15s 自动刷新，操作完成后可直观验证结果。
-
-### 4.2 幂等性
+### 10.4 幂等性
 
 | API | 幂等 | 说明 |
 |-----|------|------|
@@ -517,7 +610,7 @@ async (page) => {
 
 ---
 
-## 五、命名规范速查
+## 命名规范速查
 
 | 类型 | 规则 | 示例 |
 |------|------|------|
@@ -531,51 +624,70 @@ async (page) => {
 
 ---
 
-## 六、能力边界
+## 能力边界
 
-### ✅ Phase 2 已支持（7 模块 / 12 API）
+### ✅ 已支持（10 模块 / 12 核心 API + 8 待验证）
 
-| 模块 | API | dataType 覆盖 |
-|------|-----|--------------|
-| 认证 | Login (DOM) + RefreshToken | — |
-| 对象 | SaveBasicObject | — |
-| 字段 | SaveField + FieldPage | 14/16 种 |
-| 选项集 | ObjectPicklist/save | — |
-| 表单布局 | Layout/SaveLayoutDetail | — |
-| 列表布局 | Listlayout/Save + AddColumns | — |
-| 生命周期 | Status/Create + 8 个查询 API | — |
+| 模块 | API | dataType 覆盖 | 成熟度 |
+|------|-----|--------------|--------|
+| 认证 | Login (DOM) + RefreshToken | — | ✅ / ⚠️ |
+| 对象 | SaveBasicObject | — | ✅ |
+| 字段 | SaveField + FieldPage | 14/16 种 | ✅ |
+| 选项集 | ObjectPicklist/save | — | ✅ |
+| 表单布局 | Layout/SaveLayoutDetail | — | ✅ |
+| 列表布局 | Listlayout/Save + AddColumns | — | ✅ |
+| 生命周期 | Status/Create | — | ✅ |
+| 生命周期查询 | 8 个 Get API | — | ⚠️ 待验证 |
+| 菜单查询 | MenuGroup/QueryList | — | ⚠️ 待验证 |
+| 对象动作 | BasicObjectAction/QueryList | — | ⚠️ 待验证 |
 
-### ❌ 待 Phase 3
+### ⚠️ 待验证（API 已捕获，参数/响应未确认）
+
+- 生命周期 8 个查询 API（LifecycleRole, LifestatusUserAction, LifestatusRelation, LifestatusWorkflow, LifestatusApproveMatrix, PowerSetLifeStatusObjectAction, LifestatusAffixField, LifestatusObjectField）
+- RefreshToken — `{ "fp": "固定指纹" }` 的具体签名机制
+- MenuGroup/QueryList — 请求参数格式
+- FieldsByCodes — 用于批量字段查询
+
+### ❌ 待探索（需通过 Network 面板录制）
 
 - 字段：文件、自动编号、统计字段（3 种 dataType 未确认）
-- 生命周期：用户动作创建、关系连线
-- 工作流：完整创建流程
-- 菜单：创建 + 关联对象/布局
-- 删���/禁用操作
+- 生命周期：状态连线、用户动作创建、阶段组、整体保存
+- 工作流：创建节点/连线/激活、全局设置
+- 菜单：创建/编辑菜单、菜单集查询
+- 权限：权限集、字段级安全、角色权限分配
+- 删除/禁用操作
 
 ---
 
 ## 附录：API 路径速查
 
-| 分组 | 路径 | 用途 |
-|------|------|------|
-| 🔐 Auth | `/auth/Oauth/Login` | 登录 |
-| 🔐 Auth | `/auth/Oauth/RefreshToken` | Token 刷新 |
-| ⭐ Object | `/platform/BasicObject/SaveBasicObject` | 创建对象 |
-| ⭐ Field | `/platform/BasicObject/SaveField` | 创建字段 |
-| 📋 Field | `/platform/BasicObject/FieldPage` | 字段查询 |
-| ⭐ Picklist | `/platform/ObjectPicklist/save` | 创建选项集 |
-| ⭐ Layout | `/platform/Layout/SaveLayoutDetail` | 表单布局 |
-| ⭐ List | `/platform/Listlayout/Save` | 列表布局 |
-| ⭐ List | `/platform/Listlayout/AddColumns` | 添加列 |
-| ⭐ Lifecycle | `/config/lifecycle/Status/Create` | 创建状态 |
-| 📋 Query | `/platform/MenuGroup/QueryList` | 菜单组 |
-| 📋 Query | `/platform/biz/basicobject/FieldsByCodes` | 字段查询 |
-| 📋 Query | `/platform/BasicObjectAction/QueryList` | 对象动作 |
+| 分组 | 路径 | 用途 | 成熟度 |
+|------|------|------|--------|
+| 🔐 Auth | `/auth/Oauth/Login` | 登录（DOM） | ✅ |
+| 🔐 Auth | `/auth/Oauth/RefreshToken` | Token 刷新 | ⚠️ |
+| ⭐ Object | `/platform/BasicObject/SaveBasicObject` | 创建对象 | ✅ |
+| ⭐ Field | `/platform/BasicObject/SaveField` | 创建字段 | ✅ |
+| 📋 Field | `/platform/BasicObject/FieldPage` | 字段查询 | ✅ |
+| ⭐ Picklist | `/platform/ObjectPicklist/save` | 创建选项集 | ✅ |
+| ⭐ Layout | `/platform/Layout/SaveLayoutDetail` | 表单布局 | ✅ |
+| ⭐ List | `/platform/Listlayout/Save` | 列表布局 | ✅ |
+| ⭐ List | `/platform/Listlayout/AddColumns` | 添加列 | ✅ |
+| ⭐ Lifecycle | `/config/lifecycle/Status/Create` | 创建状态 | ✅ |
+| 📋 Lifecycle | `/config/power/LifecycleRole/Get` | 角色查询 | ⚠️ |
+| 📋 Lifecycle | `/config/power/LifestatusUserAction/Get` | 用户动作 | ⚠️ |
+| 📋 Lifecycle | `/config/power/LifestatusRelation/Get` | 状态关联 | ⚠️ |
+| 📋 Lifecycle | `/config/power/LifestatusWorkflow/Get` | 关联工作流 | ⚠️ |
+| 📋 Lifecycle | `/config/power/LifestatusApproveMatrix/Get` | 审批矩阵 | ⚠️ |
+| 📋 Lifecycle | `/config/power/PowerSetLifeStatusObjectAction/Get` | 对象动作 | ⚠️ |
+| 📋 Lifecycle | `/config/power/LifestatusAffixField/Get` | 附件字段 | ⚠️ |
+| 📋 Lifecycle | `/config/power/LifestatusObjectField/Get` | 对象字段 | ⚠️ |
+| 📋 Query | `/platform/MenuGroup/QueryList` | 菜单组 | ⚠️ |
+| 📋 Query | `/platform/biz/basicobject/FieldsByCodes` | 字段查询 | ⚠️ |
+| 📋 Query | `/platform/BasicObjectAction/QueryList` | 对象动作 | ⚠️ |
 
 ---
 
-> **版本**：v0.2.1  
-> **更新**：补录选项集/表单布局/列表布局 API + 完整 dataType 枚举(14/16) + 15s 自动刷新可视模式  
+> **版本**：v0.3.0  
+> **更新**：章节编号对齐 DOM 版（零~十）+ 成熟度三级标注（✅/⚠️/❌）+ 生命周期 8 个查询 API 升级 + 新增工作流/菜单/权限 API 探索章节 + 执行策略三级成熟度总览表  
 > **数据来源**：2026-07-08 API 录制（Phase 1: 20 POST + Phase 2: 16 新增）  
 > **测试环境**：standard-val.aksoegmp.com

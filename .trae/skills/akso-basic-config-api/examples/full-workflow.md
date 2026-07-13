@@ -35,7 +35,7 @@ async (page) => {
 }
 ```
 
-## 步骤 2：创建对象
+## 步骤 2：创建对象（见第二章 — SaveBasicObject）
 
 ```javascript
 // browser_run_code_unsafe
@@ -76,7 +76,7 @@ async (page) => {
 }
 ```
 
-## 步骤 4：创建字段
+## 步骤 4：创建字段（见第四章 — SaveField）
 
 ```javascript
 // browser_run_code_unsafe
@@ -119,7 +119,7 @@ async (page) => {
 }
 ```
 
-## 步骤 5：创建生命周期状态
+## 步骤 5：创建生命周期状态（见第七章 — Status/Create）
 
 ```javascript
 // browser_run_code_unsafe
