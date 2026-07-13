@@ -31,6 +31,16 @@
 
 ## 五、Git 操作规范
 
+### 5.1 分支规范
+- **唯一分支**：本项目仅使用 `master` 单一分支，不创建 `main` 或其他长期分支
+- **远程默认分支**：GitHub 仓库默认分支设置为 `master`
+- **禁止操作**：不得创建 `main` 分支，不得将默认分支改为其他名称
+- **AI Agent 须知**：
+  - 推送前确认当前在 `master` 分支：`git branch --show-current`
+  - 若有远程 `main` 残留，立即删除：`git push origin --delete main`
+  - 若远程默认分支不是 `master`，通过 GitHub API 修正
+
+### 5.2 提交规范
 - 提交前检查 `git diff --staged` 不包含 `.env` 或硬编码密码
 - 每次提交附带清晰的 commit message（中文）
 - 工具改动时同步更新该工具的 README
