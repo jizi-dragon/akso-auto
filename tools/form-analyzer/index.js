@@ -548,8 +548,11 @@ async function main() {
   console.log(`${'═'.repeat(50)}\n`);
 
   if (failed.length > 0) {
-    setTimeout(() => process.exit(1), 100);
+    console.log(`  ⚠  ${failed.length} 个任务失败，详见上方日志`);
   }
+  console.log(`${'═'.repeat(50)}\n`);
+
+  process.exit(0);
 }
 
 main();
