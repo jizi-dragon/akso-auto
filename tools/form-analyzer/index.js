@@ -507,6 +507,10 @@ async function main() {
 
   const results = [];
 
+  console.log(`\n${'═'.repeat(50)}`);
+  console.log(`  ${isBatch ? `批量任务开始 (${tasks.length} 个)` : `开始: ${tasks[0].object}`}`);
+  console.log(`${'═'.repeat(50)}`);
+
   try {
     await login(page, { baseUrl, username, password });
 
@@ -521,8 +525,9 @@ async function main() {
     }
   } catch (error) {
     console.error(`\n[ERROR] ${error.message}`);
-    process.exit(1);
+    results.push({ objectName: '(登录)', foundName: '', fp: '', rowCount: 0, ok: false, error: error.message });
   } finally {
+    await context.close();
     await browser.close();
   }
 
@@ -542,7 +547,9 @@ async function main() {
   }
   console.log(`${'═'.repeat(50)}\n`);
 
-  if (failed.length > 0) process.exit(1);
+  if (failed.length > 0) {
+    setTimeout(() => process.exit(1), 100);
+  }
 }
 
 main();
