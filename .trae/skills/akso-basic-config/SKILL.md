@@ -4,17 +4,17 @@ display_name: "Akso eGMP 基础配置 — 执行指令集"
 description: "Akso eGMP 系统基础配置 Skill — DOM 精确定位版。覆盖创建对象、字段（含完整字段类型矩阵）、选项集、表单布局、列表布局、生命周期、工作流、菜单等全链路基础配置操作，配有 URL 直达表、操作速查、踩坑经验附录。"
 description_zh: "Akso eGMP 系统基础配置：创建对象/字段/选项集/布局/生命周期/工作流/菜单的精确 DOM 级操作指令集"
 skill_role: executor_dom
-version: 5.1
+version: 5.2
 allowed-tools: Bash, Read, Write, Skill, WebFetch
 agent_created: true
 ---
 
 # Akso eGMP 基础配置 — Agent 执行指令集
 
-> **版本**：v5.1 — DOM 精确定位增强版
+> **版本**：v5.2 — Playwright npm 包统一执行版
 > **适用对象**：WorkBuddy AI Agent（非人类阅读教程）  
-> **执行入口**：Playwright MCP 或 playwright-cli  
-> **原则**：每步一条指令，每条指令有精确的 DOM 定位方式，优先使用 URL 直达；登录/字段创建等重复操作用「一发入魂」模式合并为单次 run_code_unsafe；所有操作步骤统一为「目标→前置条件→关键定位→操作步骤→验证方法」五要素结构  
+> **执行入口**：Playwright npm 包（`const { chromium } = require('playwright')`）  
+> **原则**：每步一条指令，每条指令有精确的 DOM 定位方式，优先使用 URL 直达；脚本通过 `shared/browser-manager.js` 统一管理浏览器生命周期；所有操作步骤统一为「目标→前置条件→关键定位→操作步骤→验证方法」五要素结构  
 > **环境信息**：存储于外部 `AksoGMP_配置环境清单.xlsx`，本 Skill 不含密码/账号
 
 > 📂 **文件结构**：
@@ -25,7 +25,7 @@ agent_created: true
 > ├── examples/         ← 实战示例（login / create-object / create-fields / create-option-set）
 > └── scripts/          ← 可复用脚本（登录 / 类型选择 / 选项集绑定 / 对象绑定 / 父对象绑定 / 助手函数）
 > ```
-> Agent 执行时可加载 `scripts/*.js` 中的代码片段直接用于 `browser_run_code_unsafe`，参考 `examples/*.md` 中的完整操作流程。
+> `scripts/*.js` 为 Node.js 可执行模块，通过 `require('../../../../shared/browser-manager')` 统一管理浏览器生命周期。可直接 `node scripts/<name>.js` 运行，也可在编排脚本中 `require` 导入使用。参考 `examples/*.md` 中的完整操作流程。
 
 ---
 
@@ -127,8 +127,8 @@ agent_created: true
 
 ```
 指令 1.2.1 — 打开浏览器并导航
-  操作：navigate → URL = 环境对应的登录地址
-        或 playwright-cli open <url> --headed
+  操作：使用 `shared/browser-manager.js` 的 `launchBrowser()` 启动浏览器，然后 `login(page, {...})` 完成登录
+        也可直接运行 `node scripts/login.js --baseUrl <url> --username <user> --password <pass>`
 
 指令 1.2.2 — 填写用户名
   定位：textbox "请输入用户名"
@@ -136,9 +136,7 @@ agent_created: true
 
 指令 1.2.3 — 填写密码 ⚠️ 需穿透 iframe
   原因：密码输入框在 <iframe> 内，主文档直接定位会失败
-  定位方式：
-    - Playwright MCP: 先定位 iframe → contentFrame → getByRole('textbox', { name: '请输入密码' })
-    - playwright-cli: 需要先 snapshot iframe 内容再操作
+  定位方式：`page.frameLocator('iframe').first().getByRole('textbox', { name: '请输入密码' })`
   操作：fill 填入对应密码
 
 指令 1.2.4 — 处理隐私声明复选框 ⚠️ 默认可能已勾选
@@ -152,24 +150,20 @@ agent_created: true
   定位：button "登录"
   操作：click
 
-指令 1.2.6 — ⚡ 一发入魂登录（推荐，3 秒内完成）
-  适用：当用户名和密码已知时，将全部登录操作合并为单次 browser_run_code_unsafe
-  原因：拆分 4 步 MCP 调用（type username → type password → check checkbox → click login）
-        每次调用有 ~2-3s 开销，累计 ~15s；合并为 1 次调用只需 ~3s
+指令 1.2.6 — ⚡ 一键登录（推荐，3 秒内完成）
+  适用：当用户名和密码已知时，使用 `login.js` 脚本一键完成登录
+  原因：`login.js` 封装了完整的登录+隐私弹窗处理+iframe 密码+落地等待逻辑
   
-  browser_run_code_unsafe code：
-    () => {
-      // 1. 填用户名
-      page.getByRole('textbox', { name: '请输入用户名' }).fill('用户名');
-      // 2. 填密码（iframe 穿透）
-      page.frameLocator('iframe').first().getByRole('textbox', { name: '请输入密码' }).fill('密码');
-      // 3. 点击登录
-      page.getByRole('button', { name: '登录' }).click();
-    }
+  方式一（直接运行）：
+    node scripts/login.js --baseUrl https://xxx.aksoegmp.com --username user --password pass
   
-  ⚠️ 注意：箭函数内不能使用 await（browser_run_code_unsafe 的代码作为表达式执行）
-  此时检查复选框已默认勾选的逻辑可省略（click 登录时服务器端不依赖该复选框状态）
-  登录后 navigate 到目标页面即可开始配置任务，无需 snapshot 确认
+  方式二（作为模块引入）：
+    const { login } = require('./scripts/login');
+    await login(page, { baseUrl, username, password });
+  
+  ⚠️ 注意：login 函数内使用 await，调用方需在 async 上下文中
+  
+  登录后 navigate 到目标页面即可开始配置任务，无需额外验证
 ```
 
 
@@ -1503,11 +1497,10 @@ agent_created: true
   避免：保存失败 → 误以为成功 → 继续下一步
   ref 仅在 snapshot 之后有效，页面变化即失效
 
-技巧 B.12 — ⚡ 登录「一发入魂」：合并为单次 run_code_unsafe
-  ❌ 慢：navigate → type username → type password → click login（4 次 MCP 调用，~15s）
-  ✅ 快：navigate → run_code_unsafe{ fill user + fill pass(iframe) + click login }（2 次，~4s）
-  code 格式必须用 () => { ... } 箭头函数体，内部不能用 await
-  登录后直接 navigate 到目标 URL 开始配置，无需 snapshot 确认（见 1.2.6）
+技巧 B.12 — ⚡ 一键登录：使用 `node scripts/login.js` 或 `require` 引入
+  ❌ 慢（旧方式）：playwright-cli open → eval → run-code（3 次 CLI 调用）
+  ✅ 快（npm 包）：node scripts/login.js --baseUrl --username --password（1 次命令）
+  也可在编排脚本中作为模块引入，与其他操作共享同一浏览器会话
 
 技巧 B.13 — ⚠️ 父对象字段的 *对象 选择器定位陷阱
   父对象字段表单的表单布局与普通对象字段不同：
@@ -1586,9 +1579,80 @@ agent_created: true
 
 ---
 
-> **版本**：v5.1 — DOM 精确定位增强版
-> **更新日期**：2026-07-13  
-> **更新内容（v5.1 — DOM 精确定位增强）**：
+## 附录 D：原子模块速查表（v2.0 — npm 包版）
+
+> 所有原子模块存放在 `scripts/` 目录，为 Node.js 可执行模块。  
+> 通过 `shared/browser-manager.js` 统一管理浏览器生命周期。  
+> 每个模块支持两种使用方式：`node scripts/<name>.js <args>` 直接运行，或在编排脚本中 `require` 导入。
+
+| 文件名 | 功能 | 导出函数 | 独立运行方式 |
+|--------|------|----------|-------------|
+| [`login.js`](scripts/login.js) | 登录（含隐私弹窗） | `login(page, opts)` | `node login.js --baseUrl --username --password` |
+| [`dismiss-popup.js`](scripts/dismiss-popup.js) | 弹窗清除 | `dismissAllPopups(page)` | —（辅助模块） |
+| [`exact-search-click.js`](scripts/exact-search-click.js) | 精确搜索点击 | `exactSearchClick(page, opts)` | `node exact-search-click.js --keyword --exactName --listUrl` |
+| [`create-option-set.js`](scripts/create-option-set.js) | 创建选项集 | `createOptionSet(page, opts)` | `node create-option-set.js --name --code --options` |
+| [`create-object.js`](scripts/create-object.js) | 创建对象 | `createObject(page, opts)` | `node create-object.js --name --code --lifecycle` |
+| [`create-field.js`](scripts/create-field.js) | 创建单个字段 | `createField(page, opts)` | `node create-field.js --name --code --dataType --objectName ...` |
+| [`save-and-verify.js`](scripts/save-and-verify.js) | 保存+验证 | `saveAndVerify(page, opts)` | `node save-and-verify.js --expectedUrlPattern ...` |
+
+### 辅助模块
+
+| 文件名 | 功能 | 导出函数 |
+|--------|------|----------|
+| [`helpers.js`](scripts/helpers.js) | 通用辅助函数集 | `verifyFieldSaved`, `safeFill`, `selectFromAntSelect`, 等 8 个 |
+| [`field-type-select.js`](scripts/field-type-select.js) | 字段类型选择 | `selectFieldType(page, typeName)` |
+| [`object-bind.js`](scripts/object-bind.js) | 对象字段绑定 | `bindObject(page, objectName)` |
+| [`option-set-bind.js`](scripts/option-set-bind.js) | 选项集字段绑定 | `bindOptionSet(page, optionSetName)` |
+| [`parent-object-bind.js`](scripts/parent-object-bind.js) | 父对象字段绑定 | `bindParentObject(page, objectName)` |
+
+### 待攻克模块（🔜 暂无脚本，需人带领 AI 收集 DOM/API）
+
+以下 4 个复杂配置模块因涉及 canvas 拖拽、dnd-kit 拦截、UI 组件逐项添加等 Playwright 自动化难点，当前无可用脚本，仅记录攻克思路：
+
+| 模块 | 难点 | 攻克路线 |
+|------|------|----------|
+| **生命周期连线+动作** | canvas 上状态连线无法用 `page.click` 定位；用户动作/进入条件/进入动作面板 DOM 结构未知 | ① 人带领进入生命周期画布 ② 收集连线按钮/面板的 DOM 定位 ③ 同步录制 Network POST 请求寻找 API |
+| **工作流节点+连线** | 节点拖拽、连线操作均在 canvas 上；触发条件（对象选择+生命周期动作绑定）DOM 复杂 | ① 收集节点目录的定位方式 ② 探索 `page.mouse` 模拟拖拽 ③ 录制创建/保存的 API |
+| **表单布局拖拽** | Ant Design 使用 dnd-kit 库，`page.dragAndDrop` 被拦截 | ① 需模拟 dnd-kit 的 `mousedown → mousemove → mouseup` 事件序列 ② gridSpan/ section type 的 combobox 定位 |
+| **编号规则 UI 操作** | 编号模式非简单 textarea，而是逐项添加的 UI 组件（类型选择+参数+删除） | ① 收集每项的添加按钮/类型 dropdown/参数 input 定位 ② 录制保存 API |
+
+### 调用示例
+
+```bash
+# 登录（直接运行）
+node .trae/skills/akso-basic-config/scripts/login.js \
+  --baseUrl https://standard-val.aksoegmp.com \
+  --username liyulong \
+  --password 88888888
+
+# 创建对象（直接运行）
+node .trae/skills/akso-basic-config/scripts/create-object.js \
+  --name "测试对象" --code "test_obj" --lifecycle
+
+# 在编排脚本中 require 使用
+const { login } = require('./scripts/login');
+const { createObject } = require('./scripts/create-object');
+const { launchBrowser, closeBrowser } = require('../../shared/browser-manager');
+
+const { browser, page } = await launchBrowser();
+await login(page, { baseUrl, username, password });
+const result = await createObject(page, { name: '测试对象', code: 'test_obj', enableLifecycle: true });
+await closeBrowser(browser);
+```
+
+---
+
+> **版本**：v5.2 — Playwright npm 包统一执行版
+> **更新日期**：2026-07-14  
+> **更新内容（v5.2 — Playwright npm 包统一执行）**：
+> - 🔄 **执行架构统一**：从 `playwright-cli` + MCP `browser_run_code_unsafe` 统一为 Playwright npm 包（`require('playwright')`）
+> - 🆕 **新增 `shared/browser-manager.js`**：统一浏览器启动/登录/关闭管理
+> - 🔧 **所有 scripts/*.js 重构**：从 CLI `async(page)=>{}` 模式改为 Node.js 模块，支持 `require` 引入和直接 `node` 执行
+> - 🗑️ **删除 `login-one-shot.js`**：功能合并到 `login.js`
+> - 📝 **更新附录 D**：原子模块速查表升级为 v2.0，调用示例全部改为 npm 包方式
+> - 📝 **更新技巧 B.12**：一键登录从 MCP 方式改为 npm 包方式
+
+> **往期更新（v5.1 — DOM 精确定位增强）**：
 > - 🆕 **第十章 编号规则**：新增完整的编号规则配置章节（10.1 进入/10.2 创建/10.3 语法速查），覆盖名称/Code/编号模式表达式/绑定对象/起始值/步长等全链路操作
 > - 📐 **章节编号调整**：原「十、验证测试」→「十一、验证测试」，内部指令编号同步更新（10.1~10.5 → 11.1~11.5）
 > - 🔧 **第五章 表单布局升级**：5.1/5.2 升级为五要素结构（目标/前置条件/关键定位/操作步骤/验证方法），新增 DOM 精确定位：

@@ -1,20 +1,20 @@
 ---
 name: akso-basic-config-api
 display_name: "Akso eGMP 基础配置 — API 直调版"
-description: "Akso eGMP 系统基础配置 Skill — API 直调版（Phase 2）。通过 HTTP API 直接创建对象、字段（14/16种类型）、选项集、表单布局、列表布局、生命周期状态，比 DOM 模式快 40x。执行引擎：browser_run_code_unsafe + page.evaluate(fetch)。内置 15s 自动刷新可视模式。覆盖 10 个模块共 12 核心 API + 8 待验证 API + 5 OpenAPI + 4 探索路标。"
+description: "Akso eGMP 系统基础配置 Skill — API 直调版（Phase 2）。通过 HTTP API 直接创建对象、字段（14/16种类型）、选项集、表单布局、列表布局、生命周期状态，比 DOM 模式快 40x。执行引擎：Playwright npm 包 + page.evaluate(fetch)。内置 15s 自动刷新可视模式。覆盖 10 个模块共 12 核心 API + 8 待验证 API + 5 OpenAPI + 4 探索路标。"
 description_zh: "Akso eGMP 基础配置 API 版：通过 HTTP 直调创建对象/字段/选项集/布局/生命周期状态，内置可视刷新，极速配置"
 skill_role: executor_api
-version: 0.4.0
+version: 0.5.0
 allowed-tools: Bash, Read, Write, Skill, WebFetch
 agent_created: true
 ---
 
 # Akso eGMP 基础配置 — API 直调版 (Phase 2)
 
-> **版本**：v0.4.0 — Phase 2 重构（章节对齐 + 成熟度标注）  
+> **版本**：v0.5.0 — Playwright npm 包统一执行版  
 > **适用对象**：WorkBuddy AI Agent  
-> **执行入口**：Playwright MCP `browser_run_code_unsafe` → `page.evaluate(fetch)`  
-> **原则**：登录走浏览器 DOM，配置走 HTTP API。一次登录，全程 API 直调。  
+> **执行入口**：Playwright npm 包 → `page.evaluate(fetch)`，由 `shared/browser-manager.js` 管理浏览器生命周期  
+> **原则**：登录走浏览器 DOM（`shared/browser-manager.js`），配置走 HTTP API。一次登录，全程 API 直调。  
 > **性能**：DOM 模式 2 分钟 → API 模式 3 秒（40x 提速）  
 > **覆盖**：10 个模块 / 12 个核心 API（✅）+ 8 个待验证 API（⚠️）/ 14 种字段类型  
 > **环境信息**：存储于外部 `AksoGMP_配置环境清单.xlsx`，本 Skill 不含密码
@@ -24,7 +24,7 @@ agent_created: true
 > akso-basic-config-api/
 > ├── SKILL.md          ← 核心指令集 + 完整 API 参考
 > ├── scripts/
-> │   └── api-helpers.js ← 10 个封装函数
+> │   └── api-helpers.js ← Node.js 模块，导出 30+ 个封装函数，通过 `shared/browser-manager.js` 管理浏览器
 > └── examples/
 >     └── full-workflow.md
 > ```
@@ -37,7 +37,7 @@ agent_created: true
 
 ```
 Phase A — 登录（DOM 模式，~3s）
-  browser_navigate → fill + click → cookie/session 就绪
+  使用 `shared/browser-manager.js` 的 `login()` 完成登录 → cookie/session 就绪
   ↓
 Phase B — 配置（API 模式，每个 API ~200ms）
   page.evaluate(fetch) → POST /api/... → 解析响应
@@ -48,33 +48,15 @@ Phase B — 配置（API 模式，每个 API ~200ms）
 登录后 JWT token 存储在 `__auth_token__` cookie 中（583 字符，非 HttpOnly）。
 
 > 🔴 **认证 Bug（已修复）**：`page.evaluate(fetch)` + `credentials: 'include'` 不会自动携带 `__auth_token__` cookie（SameSite=Lax 限制 fetch 跨模式请求）。  
-> ✅ **解决方案**：必须手动从 `document.cookie` 提取 `__auth_token__`，加入 `Authorization: Bearer <token>` 头。
+> ✅ **解决方案**：通过 Playwright 的 `page.context().cookies()` API 提取 `__auth_token__`，加入 `Authorization: Bearer <token>` 头传入 `page.evaluate()`。
 
 ### 0.3 API 调用模板（带认证修复）
 
 ```javascript
-// browser_run_code_unsafe 中执行 — 必须包含 token 提取
-async (page) => {
-  const result = await page.evaluate(async (apiPath, body) => {
-    // 🔑 从 cookie 提取 token 作为 Bearer 头
-    const getCookie = (name) => {
-      const m = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-      return m ? m[2] : null;
-    };
-    const token = getCookie('__auth_token__');
-
-    const resp = await fetch('https://standard-val.aksoegmp.com' + apiPath, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + token    // ← 必须！
-      },
-      body: JSON.stringify(body)
-    });
-    return await resp.json();
-  }, '/api/...', { /* request body */ });
-  return result;  // { code: 0, data: ... }
-}
+// Node.js 侧 — 通过 Playwright page.context().cookies() 获取 token
+const { apiPost } = require('./scripts/api-helpers');
+const result = await apiPost(page, '/api/platform/BasicObject/Save', { name: '测试对象', code: 'test_obj' });
+// result: { code: 0, data: { id: '...' } }
 ```
 
 ### 0.4 可视模式 — 自动刷新策略
@@ -82,21 +64,14 @@ async (page) => {
 > API 操作在后台静默执行，浏览器页面不会自动感知数据变化（React state 不会更新）。  
 > 开启「可视模式」后，每 15 秒自动刷新当前页面，让用户实时看到配置结果。
 
-**启用方式** — 在登录完成后注入刷新定时器：
+**启用方式** — 调用 api-helpers 的 `enableVisibility()` 函数：
 
 ```javascript
-// browser_run_code_unsafe — 登录后立即执行
-async (page) => {
-  // 注入 15 秒自动刷新
-  await page.evaluate(() => {
-    if (window.__aksoRefreshId) clearInterval(window.__aksoRefreshId);
-    window.__aksoRefreshId = setInterval(() => {
-      console.log('[可视模式] 刷新页面...');
-      location.reload();
-    }, 15000);
-  });
-  return '可视模式已开启，每 15 秒刷新一次';
-}
+// Node.js 侧 — 通过 page.evaluate 注入自动刷新
+const { enableVisibility } = require('./scripts/api-helpers');
+await enableVisibility(page, 15000);
+// 浏览器页面将每 15 秒自动刷新
+```
 ```
 
 **搭配导航**：在每轮 API 批量操作前，先 navigate 到目标模块页面，让刷新展示正确内容：
@@ -122,7 +97,7 @@ await page.evaluate(() => {
 
 > ⚠️ **刷新风险**：页面刷新会中断正在进行的 `page.evaluate()` 调用。建议：
 > - API 批量操作完成后启动刷新（而非操作期间）
-> - 或使用 `browser_run_code_unsafe` 调用 API（不受页面刷新影响，因为 fetch 在 Playwright 服务端执行）
+> - 或使用 `page.evaluate(fetch)` 调用 API（不受页面刷新影响，因为 fetch 在 Playwright 服务端执行）
 
 ### 0.5 API 响应通用格式
 
@@ -154,43 +129,29 @@ await page.evaluate(() => {
 
 > 从 `d:/akso/akso_claw/AksoGMP_配置环境清单.xlsx` 读取。
 
-### 1.2 登录（一发入魂，~3s）
+### 1.2 登录（一键完成，~3s）
 
-```
-browser_run_code_unsafe code：
-  async (page) => {
-    await page.goto('https://standard-val.aksoegmp.com/login');
-    await page.getByRole('textbox', { name: '请输入用户名' }).fill('账号');
-    await page.frameLocator('iframe').first()
-      .getByRole('textbox', { name: '请输入密码' }).fill('密码');
-    await page.getByRole('button', { name: '登录' }).click();
-    await page.waitForURL('**/web', { timeout: 15000 });
-    return 'OK: ' + page.url();
-  }
+```javascript
+// 方式一：直接运行 login.js
+// node .trae/skills/akso-basic-config/scripts/login.js --baseUrl <url> --username <user> --password <pass>
+
+// 方式二：在 Node.js 脚本中引入
+const { launchBrowser, login, closeBrowser } = require('../../shared/browser-manager');
+const { browser, page } = await launchBrowser();
+await login(page, { baseUrl, username, password });
+// 登录完成，page 已就绪
 ```
 
 ### 1.3 登录 + 开启可视模式（推荐组合）
 
-```
-browser_run_code_unsafe code：
-  async (page) => {
-    // 登录
-    await page.goto('https://standard-val.aksoegmp.com/login');
-    await page.getByRole('textbox', { name: '请输入用户名' }).fill('账号');
-    await page.frameLocator('iframe').first()
-      .getByRole('textbox', { name: '请输入密码' }).fill('密码');
-    await page.getByRole('button', { name: '登录' }).click();
-    await page.waitForURL('**/web', { timeout: 15000 });
-    
-    // 开启可视模式
-    await page.evaluate(() => {
-      if (window.__aksoRefreshId) clearInterval(window.__aksoRefreshId);
-      window.__aksoRefreshId = setInterval(() => location.reload(), 15000);
-    });
-    
-    return '登录成功 + 可视模式已开启: ' + page.url();
-  }
-```
+```javascript
+const { launchBrowser, login, closeBrowser } = require('../../shared/browser-manager');
+const { enableVisibility } = require('./scripts/api-helpers');
+
+const { browser, page } = await launchBrowser();
+await login(page, { baseUrl, username, password });
+await enableVisibility(page, 15000);
+// 登录完成 + 可视模式已开启
 
 > ⚠️ 密码使用 RSA 公钥加密，API 层面无法直接构造，因此登录始终走 DOM。
 
@@ -467,7 +428,7 @@ POST /api/config/lifecycle/Status/Create
 > 1. `browser_navigate` → `/admin/config/lifecycle`
 > 2. 点击目标生命周期 → 进入编辑画布
 > 3. 在画布上创建状态连线
-> 4. 在 `browser_run_code_unsafe` 外用 Playwright MCP 监听 Network 请求
+> 4. 在浏览器会话外用 Playwright 监听 Network 请求
 > 5. 录制到的 `POST` 请求即该 API 的请求模板
 
 ### 7.4 其他生命周期待探索项
@@ -490,7 +451,7 @@ POST /api/config/lifecycle/Status/Create
 ### 8.1 工作流创建 API ❌ 待探索
 
 > **当前状态**：工作流（Workflow）的创建/保存 API 尚未录制。  
-> **探索方式**：需要在实时浏览器会话中，通过 `browser_run_code_unsafe` 导航到工作流配置页面，配合 DevTools Network 面板录制 `POST` 请求。
+> **探索方式**：需要在实时浏览器会话中，导航到工作流配置页面（`/admin/config/workflow`），配合 DevTools Network 面板录制 `POST` 请求。
 
 **探索步骤**：
 1. `browser_navigate` → `/admin/config/workflow`
@@ -597,7 +558,7 @@ POST /api/config/lifecycle/Status/Create
 ### 10.3 一气呵成脚本（注入 api-helpers.js 后执行）
 
 ```javascript
-// browser_run_code_unsafe — 批量创建对象 + 字段 + 布局
+// Node.js — 批量创建对象 + 字段 + 布局
 async (page) => {
   // 注入 helpers（从 scripts/api-helpers.js 加载）
   await page.evaluate(fs.readFileSync('.../api-helpers.js', 'utf-8'));
@@ -715,7 +676,7 @@ async (page) => {
 **请求示例**：
 
 ```javascript
-// browser_run_code_unsafe
+// Node.js — API 调用示例
 async (page) => {
   const result = await page.evaluate(async () => {
     const { getObjectInfo } = window.__aksoAPI;

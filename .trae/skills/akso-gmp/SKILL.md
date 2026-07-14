@@ -26,8 +26,8 @@ agent_created: true
 │  ┌─────────────────────────┐  ┌─────────────────────────────────┐│
 │  │ akso-basic-config       │  │ akso-basic-config-api           ││
 │  │ (DOM 版)                │  │ (API 版)                        ││
-│  │ 浏览器 Playwright 操作  │  │ HTTP API 直调 (40x 提速)       ││
-│  │ 可视化验证 · 页面探索   │  │ 批量配置 · Session 模式        ││
+│  │ Playwright npm — DOM 操 │  │ Playwright npm — API 直调      ││
+│  │ 可视化验证 · 页面探索   │  │ 批量配置 · 比 DOM 快 40x       ││
 │  └─────────────────────────┘  └─────────────────────────────────┘│
 ├──────────────────────────────────────────────────────────────────┤
 │                        复用层 (Reusable Assets)                   │
@@ -399,18 +399,22 @@ AI 要学的不只是「点哪里」：
 
 ### 配置蓝图存放
 
-所有配置蓝图统一存放在 `akso-gmp/playbooks/` 目录下，与可回放 Playbook 同目录管理：
+模板文件（`blueprint-template.md`）存放在 `akso-gmp/playbooks/` 目录下。  
+**实际生成的配置蓝图归档到 `output/blueprints/` 目录**，与 `output/` 下的其他运行时产物统一管理，避免污染 Skill 定义目录：
 
 ```
-akso-gmp/
-├── SKILL.md
-├── playbooks/
-│   ├── blueprint-template.md          # 蓝图模板（空壳，按 7 组成部分填写）
-│   ├── deviation-v1.0.md              # 偏差模块配置蓝图
-│   ├── capa-v1.0.md                   # CAPA 模块配置蓝图
-│   ├── api-lifecycle-v1.0.md          # 原料药生命周期配置蓝图
-│   └── ...
-└── .learnings/
+akso-auto/
+├── .trae/
+│   └── skills/
+│       └── akso-gmp/
+│           └── playbooks/
+│               └── blueprint-template.md      # 模板（仅此一个）
+├── output/
+│   └── blueprints/
+│       ├── dinner-tonight-blueprint.md        # 「晚上吃什么」蓝图
+│       ├── deviation-v1.0.md                  # 偏差模块蓝图
+│       └── ...
+└── external_reference_resources/
 ```
 
 ### Playbook 命名规范

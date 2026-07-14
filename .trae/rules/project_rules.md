@@ -5,7 +5,10 @@
 - `tools/<tool-name>/` — 每个工具独立子目录，各自含 `index.js`（入口）+ `README.md`（AI 使用说明）
 - `output/` — 工具运行时产物（不入 Git，见 `.gitignore`）
 - `.trae/skills/` — TRAE Skill 定义，仅 AI Agent 读取
+- `.trae/skills/akso-gmp/playbooks/` — **仅放模板级文件**（如 `blueprint-template.md`），不放实际配置蓝图
 - `.trae/documents/` — 计划文档归档
+- `output/blueprints/` — **实际配置蓝图归档**（如 `dinner-tonight-blueprint.md`），不受 Skill 目录污染
+- `external_reference_resources/` — 外部参考文档（API 文档、配置示例等）
 
 ## 二、工具开发规范
 
