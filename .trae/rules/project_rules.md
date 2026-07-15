@@ -99,3 +99,81 @@ tools/<tool-name>/
 ├── README.md      # AI Agent 使用说明
 └── lib/           # 工具内部模块（可选）
 ```
+
+## 八、Playwright 浏览器生命周期管理
+
+> ⚠️ **红线**：禁止使用任何系统级命令（`Get-Process`、`Stop-Process`、`taskkill`、`killall` 等）无差别终止 Chrome 进程，会连带关闭用户自己打开的浏览器窗口。
+
+### 8.1 两种工作模式
+
+| 模式 | 适用场景 | 浏览器生命周期 | 结束时 |
+|------|----------|---------------|--------|
+| **执行模式** | 自动化配置任务（创建对象/字段/批量操作），完成后无需人工审阅 | `chromium.launch()` 启动，脚本管理 | `await browser.close()` 正常关闭，释放资源 |
+| **调试模式** | 需要用户审阅、演示、逐步指导、收集 DOM 结构 | `chromium.launch()` 启动，**不调用 close()** | 等待用户确认完成后再调用 `browser.close()`，或由用户手动关闭浏览器窗口 |
+
+### 8.2 执行模式模板
+
+```js
+const { chromium } = require('playwright');
+
+(async () => {
+  const browser = await chromium.launch({ headless: false });
+  const page = await browser.newPage();
+
+  await doWork(page);  // 执行自动化任务
+
+  await browser.close();  // 正常关闭
+})().catch(console.error);
+```
+
+### 8.3 调试模式模板
+
+```js
+const { chromium } = require('playwright');
+
+(async () => {
+  const browser = await chromium.launch({
+    headless: false,
+    args: ['--remote-debugging-port=9222']  // 必须暴露 CDP 端口
+  });
+  const page = await browser.newPage();
+
+  await doWork(page);  // 执行操作
+
+  console.log('READY. CDP: http://localhost:9222');
+  // ⚠️ 调试模式下不调用 browser.close()
+  // 后续通过 connectOverCDP 连接继续操作
+  // 或等用户手动关闭浏览器窗口后 node 进程自动退出
+})();
+```
+
+### 8.4 CDP 连接与清理
+
+```js
+// ✅ 正确：连接已有浏览器实例
+const browser = await chromium.connectOverCDP('http://localhost:9222');
+const page = browser.contexts()[0].pages()[0];
+await doWork(page);
+await browser.close();  // 仅断开 CDP 连接，浏览器窗口保留
+
+// ❌ 绝对禁止：杀系统进程
+// Get-Process -Name "chrome" | Stop-Process -Force  ← 会杀掉用户自己的 Chrome！
+
+// ✅ 残留清理：以当前 CDP 端口为目标精准关闭
+// 方案A: 同名端口已被占用 → connectOverCDP → browser.close()
+// 方案B: 等 node 进程退出，Playwright 自动清理其 launch() 的子进程
+```
+
+### 8.5 模式选择决策树
+
+```
+用户说"创建/配置/执行" + 不需要审阅 → 执行模式
+  ├── 脚本末尾调用 browser.close()
+  └── 完成后输出结果
+
+用户说"演示/学习/审阅/先不要保存" → 调试模式
+  ├── 启动时暴露 CDP 端口 (--remote-debugging-port=9222)
+  ├── 完成任务后不 close，输出 "READY"
+  ├── 后续通过 connectOverCDP 连接继续操作
+  └── 用户发送"关闭浏览器"指令时 → connectOverCDP → browser.close()
+```

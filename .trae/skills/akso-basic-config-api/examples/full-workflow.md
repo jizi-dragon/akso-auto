@@ -1,214 +1,126 @@
 # akso-basic-config-api — 完整工作流示例
 
 > 场景：创建对象 → 添加字段 → 配置生命周期状态  
-> 模式：混合（DOM 登录 + API 配置）
+> 模式：Node.js require 模块 + shared/browser-manager.js
 
 ---
 
-## 步骤 0：登录（DOM 模式）
+## 方式一：按需导入模块（推荐）
 
 ```javascript
-// browser_run_code_unsafe
-async (page) => {
-  await page.goto('https://standard-val.aksoegmp.com/login');
-  await page.getByRole('textbox', { name: '请输入用户名' }).fill('liyulong');
-  await page.frameLocator('iframe').first()
-    .getByRole('textbox', { name: '请输入密码' }).fill('密码');
-  await page.getByRole('button', { name: '登录' }).click();
-  await page.waitForURL('**/web', { timeout: 15000 });
-  return '登录成功';
-}
-```
+const { launchBrowser, login, closeBrowser } = require('../../../shared/browser-manager');
+const { createObject } = require('../scripts/create-object');
+const { createTextField, createOptionField, createDateField } = require('../scripts/create-field');
+const { createPicklist } = require('../scripts/create-picklist');
+const { createLifecycleStatus } = require('../scripts/create-lifecycle-status');
+const { getObjectInfo, getFieldList, getLifecycleStatus } = require('../scripts/openapi-queries');
 
-## 步骤 1：注入 API 助手
+(async () => {
+  const { browser, page } = await launchBrowser();
+  await login(page, { baseUrl: 'https://xxx.aksoegmp.com', username: 'user', password: 'pass' });
 
-```javascript
-// browser_run_code_unsafe — 注入 api-helpers.js
-async (page) => {
-  await page.evaluate(async () => {
-    // 粘贴 scripts/api-helpers.js 的完整内容（或 write 到文件后 evaluate 读取）
-    const script = document.createElement('script');
-    script.src = 'file:///C:/Users/88450/.workbuddy/skills/akso-basic-config-api/scripts/api-helpers.js';
-    document.head.appendChild(script);
+  // 1. 创建对象
+  const objResult = await createObject(page, {
+    name: '变更控制',
+    code: 'change_control__c',
+    enableLifeCycle: true
   });
-  return 'API helpers injected';
-}
-```
+  console.log(objResult); // → { success: true, message: '对象创建成功' }
 
-## 步骤 2：创建对象（见第二章 — SaveBasicObject）
+  // 2. 获取 objectId
+  const info = await getObjectInfo(page, 'change_control__c');
+  console.log('objectId:', info.objectId, 'lifecycleId:', info.lifecycleId);
 
-```javascript
-// browser_run_code_unsafe
-async (page) => {
-  const result = await page.evaluate(async () => {
-    const { createObject } = window.__aksoAPI;
-    return await createObject({
-      name: '变更控制',
-      code: 'change_control__c',
-      enableLifeCycle: true
-    });
+  // 3. 创建选项集
+  const plResult = await createPicklist(page, {
+    name: '变更类型', code: 'change_type__c',
+    options: [
+      { name: '主要', code: 'major__c', status: 1, operations: 1, sort: 0 },
+      { name: '次要', code: 'minor__c', status: 1, operations: 1, sort: 1 }
+    ]
   });
-  return result;
-}
-// → { success: true, message: '对象创建成功' }
-```
 
-## 步骤 3：获取对象 ID
+  // 4. 批量创建字段
+  await createTextField(page, { objectId: info.objectId, name: '编号', code: 'no__c', isRequired: true });
+  await createTextField(page, { objectId: info.objectId, name: '标题', code: 'title__c', isRequired: true });
+  await createDateField(page, { objectId: info.objectId, name: '发生日期', code: 'happen_date__c' });
 
-```javascript
-// 方式 A（推荐）：用 OpenAPI 查询接口获取 ID
-// browser_run_code_unsafe
-async (page) => {
-  const objInfo = await page.evaluate(async () => {
-    const { getObjectInfo } = window.__aksoAPI;
-    return await getObjectInfo('变更控制对应的code__c');
-  });
-  return { objectId: objInfo.objectId, lifecycleId: objInfo.lifecycleId };
-}
-// → { objectId: 'uuid...', lifecycleId: 'uuid...' }
+  // 5. 创建生命周期状态
+  const statuses = [
+    { name: '草稿', code: 'status_draft__c' },
+    { name: '待审批', code: 'status_pending__c' },
+    { name: '已完成', code: 'status_done__c' },
+    { name: '已关闭', code: 'status_closed__c' }
+  ];
+  for (const s of statuses) {
+    await createLifecycleStatus(page, { lifecycleId: info.lifecycleId, ...s });
+  }
 
-// 方式 B（备选）：导航到对象列表，从页面元素中获取
-// browser_navigate → /admin/config/basic-objects/list
-// 然后在页面上找到刚创建的对象，点击进入，URL 中的 ?id= 就是 objectId
+  // 6. 验证结果
+  const fields = await getFieldList(page, 'change_control__c');
+  const statusCount = await getLifecycleStatus(page, 'change_control__c');
+  console.log(`验证: ${fields.count} 个字段, ${statusCount.count} 个状态`);
 
-// 或者用 page.evaluate 遍历表格
-async (page) => {
-  const objId = await page.evaluate(() => {
-    // 在对象列表页面查找 name='变更控制' 的行的 data-row-key
-    const rows = document.querySelectorAll('tr[data-row-key]');
-    for (const row of rows) {
-      if (row.textContent.includes('变更控制')) {
-        return row.getAttribute('data-row-key');
-      }
-    }
-    return null;
-  });
-  return { objectId: objId };
-}
-```
-
-## 步骤 4：创建字段（见第四章 — SaveField）
-
-```javascript
-// browser_run_code_unsafe
-async (page) => {
-  const results = await page.evaluate(async (objectId) => {
-    const { createTextField, createOptionField, log } = window.__aksoAPI;
-    
-    // 创建文本字段
-    const r1 = await createTextField({
-      objectId,
-      name: '变更编号',
-      code: 'change_no__c',
-      isRequired: true
-    });
-    log('文本字段', r1);
-    
-    // 创建另一个文本字段
-    const r2 = await createTextField({
-      objectId,
-      name: '变更标题',
-      code: 'change_title__c',
-      isRequired: true
-    });
-    log('文本字段', r2);
-    
-    // 创建选项字段（需要先有 picklistId）
-    const r3 = await createOptionField({
-      objectId,
-      name: '变更类型',
-      code: 'change_type__c',
-      picklistId: '92e50796-6d5e-a3ad-bc34-3a224e2d3086', // 替换为实际选项集 ID
-      isRequired: true
-    });
-    log('选项字段', r3);
-    
-    return { r1, r2, r3 };
-  }, '目标对象ID');
-  
-  return results;
-}
-```
-
-## 步骤 5：创建生命周期状态（见第七章 — Status/Create）
-
-```javascript
-// browser_run_code_unsafe
-async (page) => {
-  const results = await page.evaluate(async (lifecycleId) => {
-    const { createLifecycleStatus, log } = window.__aksoAPI;
-    
-    const statuses = [
-      { name: '草稿', code: 'status_draft__c' },
-      { name: '待审批', code: 'status_pending__c' },
-      { name: '审批通过', code: 'status_approved__c' },
-      { name: '已关闭', code: 'status_closed__c' }
-    ];
-    
-    const resultList = [];
-    for (const s of statuses) {
-      const r = await createLifecycleStatus({
-        lifecycleId,
-        name: s.name,
-        code: s.code,
-        isEnabled: true
-      });
-      log(`状态:${s.name}`, r);
-      resultList.push(r);
-    }
-    
-    return resultList;
-  }, '生命周期ID');
-  
-  return results;
-}
+  await closeBrowser(browser);
+})();
 ```
 
 ---
 
-## 瓶颈：ID 获取
+## 方式二：使用编排器一键执行（最快）
 
-Phase 1 最明显的短板是 **ID 链路**：
+```javascript
+const { launchBrowser, login, closeBrowser } = require('../../../shared/browser-manager');
+const { runFullWorkflow } = require('../scripts/orchestrate');
 
+(async () => {
+  const { browser, page } = await launchBrowser();
+  await login(page, { baseUrl: 'https://xxx.aksoegmp.com', username: 'user', password: 'pass' });
+
+  const blueprint = {
+    object: { name: '变更控制', code: 'change_control__c', enableLifeCycle: true },
+    options: [{
+      name: '变更类型', code: 'change_type__c',
+      options: [
+        { name: '主要', code: 'major__c', status: 1, operations: 1, sort: 0 },
+        { name: '次要', code: 'minor__c', status: 1, operations: 1, sort: 1 }
+      ]
+    }],
+    fields: [
+      { name: '编号', code: 'no__c', dataType: 1, isRequired: true },
+      { name: '标题', code: 'title__c', dataType: 1, isRequired: true },
+      { name: '日期', code: 'happen_date__c', dataType: 5 }
+    ],
+    layouts: { formName: '变更主布局', listName: '变更列表' }
+  };
+
+  const result = await runFullWorkflow(page, blueprint);
+  console.log(JSON.stringify(result, null, 2));
+
+  await closeBrowser(browser);
+})();
 ```
-创建对象 → 不返回 objectId ❌
-创建字段 → 需要 objectId
-创建状态 → 需要 lifecycleId
+
+也可以直接运行编排器内置演示（不需要写代码）：
+```bash
+node .trae/skills/akso-basic-config-api/scripts/orchestrate.js
 ```
-
-**当前解决方案**：
-1. 创建对象后 navigate 到对象列表页
-2. 从 DOM 中查找新对象获取 ID
-3. 用 ID 继续后续 API 调用
-
-**Phase 2 改进方向**：
-- 实现对象查询 API 调用（如果存在）
-- 或者用 page.evaluate 脚本快速从表格提取 ID
 
 ---
 
-## 步骤 6：验证配置结果（OpenAPI 查询辅助）
+## 方式三：统一入口导入（兼容旧模式，备选）
 
 ```javascript
-// browser_run_code_unsafe — 用 OpenAPI 查询接口验证创建结果
-async (page) => {
-  const results = await page.evaluate(async () => {
-    const { getObjectInfo, getFieldList, getPicklistOptions, getLifecycleStatus, log } = window.__aksoAPI;
-    
-    // 1. 验证对象创建 + 获取 objectId
-    const obj = await getObjectInfo('change_control__c');
-    log('对象查询', { success: obj.success, objectId: obj.objectId, lifecycleId: obj.lifecycleId });
-    
-    // 2. 验证字段列表
-    const fields = await getFieldList('change_control__c');
-    log('字段查询', { success: fields.success, count: fields.count });
-    
-    // 3. 验证生命周期状态
-    const statuses = await getLifecycleStatus('change_control__c');
-    log('状态查询', { success: statuses.success, count: statuses.count });
-    
-    return { obj, fields, statuses };
-  });
-  return results;
-}
+const { launchBrowser, login, closeBrowser } = require('../../../shared/browser-manager');
+const api = require('../scripts');
+
+(async () => {
+  const { browser, page } = await launchBrowser();
+  await login(page, { baseUrl: 'https://xxx.aksoegmp.com', username: 'user', password: 'pass' });
+
+  await api.createObject(page, { name: '变更控制', code: 'change_control__c' });
+  await api.createTextField(page, { objectId: '...', name: '编号', code: 'no__c' });
+
+  await closeBrowser(browser);
+})();
 ```

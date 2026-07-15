@@ -11,7 +11,7 @@ agent_created: true
 
 # Akso eGMP 基础配置 — Agent 执行指令集
 
-> **版本**：v5.2 — Playwright npm 包统一执行版
+> **版本**：v5.3 — 生命周期 DOM 实测版
 > **适用对象**：WorkBuddy AI Agent（非人类阅读教程）  
 > **执行入口**：Playwright npm 包（`const { chromium } = require('playwright')`）  
 > **原则**：每步一条指令，每条指令有精确的 DOM 定位方式，优先使用 URL 直达；脚本通过 `shared/browser-manager.js` 统一管理浏览器生命周期；所有操作步骤统一为「目标→前置条件→关键定位→操作步骤→验证方法」五要素结构  
@@ -778,89 +778,174 @@ agent_created: true
 
 ---
 
-## 七、配置生命周期（扩展）
+## 七、配置生命周期
 
 > **前置条件**：对象创建时已勾选 checkbox "生命周期"。如未勾选，跳过本章。
 > **URL 直达**：`/admin/config/lifecycle`
+> **命名规则**：生命周期名称 = **对象名 + "生命周期"**（如对象"晚餐计划"→生命周期"晚餐计划生命周期"）
 
-### 7.1 进入生命周期
+### 7.1 进入生命周期详情页
 
 ```
-指令 7.1.1 — URL 直达
-  操作：navigate → /admin/config/lifecycle
+指令 7.1.1 — 导航到生命周期列表
+  【目标】进入对象生命周期管理列表页
+  【前置条件】已登录管理端
+  【关键定位】URL：/admin/config/lifecycle
+  【操作步骤】navigate → /admin/config/lifecycle
+  【验证方法】页面显示生命周期列表表格，列头：名称、Code、对象、状态、生命周期状态、操作
 
-指令 7.1.2 — 备选：点击对象详情页的标签
-  操作：click link "生命周期"（可能需要先确认标签存在）
+指令 7.1.2 — 搜索目标生命周期
+  【目标】在列表中找到目标对象的生命周期并进入详情页
+  【前置条件】已在生命周期列表页（/admin/config/lifecycle）
+  【关键定位】
+    - 搜索框：getByPlaceholder('请输入查询条件')
+    - 表格行选择器：.ant-table-row，第 1 列（名称）为生命周期名
+  【操作步骤】
+    1. getByPlaceholder('请输入查询条件').fill('对象名')  // 如 fill('晚餐计划')
+    2. page.keyboard.press('Enter')  // 触发搜索
+    3. 等待表格刷新后，用 exact: true 精确匹配行：
+       page.getByText('晚餐计划生命周期', { exact: true }).click()
+       ⚠️ 注意：必须 exact: true，避免模糊匹配到名称相似的其他生命周期
+    4. 或点击第 1 列中的 <a> 链接进入
+  【验证方法】URL 变为 /admin/config/lifecycle/{uuid}?__edit=2
+    页面上方面包屑显示「所有的生命周期 > 对象名生命周期」
+    页面下方可见「状态」「进入条件」「进入动作」「用户动作」等折叠面板
+
+指令 7.1.3 — 备选：直接浏览列表
+  【目标】如果列表较短（<20 条），可直接浏览后点击目标行
+  【操作步骤】扫描 .ant-table-row 各行的第 1 列文本，找到"对象名生命周期"后 click
 ```
 
 ### 7.2 创建状态
 
 ```
-指令 7.2.1 — 创建状态节点
-  【目标】在生命周期画布上添加新的状态节点
-  【前置条件】已进入生命周期配置页面，画布可见
-  【关键定位】button "创建状态" 或 "+" 按钮（画布区域）
-  【操作步骤】
-    1. click button "创建状态"（或画布上的 "+" 按钮）
-    2. 弹出状态配置对话框
-    3. 填写状态名称（中文）：如 草稿、待提交、审批中、已完成、已关闭
-    4. 填写状态 Code：status_ + 英文，如 status_Draft
-    5. 勾选/取消「设为初始状态」：有且仅有一个状态需勾选（通常是"草稿"）
-    6. click "确定" 关闭对话框
-    7. 重复步骤 1-6 创建所有业务需要的状态（建议 3-8 个）
-  【验证方法】画布上出现新状态节点，初始状态节点有特殊标记（如星号或边框高亮）
-      navigate 到 /admin/config/lifecycle 刷新页面，确认所有状态节点仍在画布上
-```
-
-### 7.3 状态连线
-
-```
-指令 7.3.1 — 按钮连线方式
-  【目标】在两个状态之间建立连线，定义状态流转路径
-  【前置条件】画布上已有至少 2 个状态节点
+指令 7.2.1 — 点击创建按钮
+  【目标】在生命周期的「状态」表格中创建新状态
+  【前置条件】已进入生命周期详情页（/admin/config/lifecycle/{uuid}?__edit=2）
   【关键定位】
-    - 源状态节点上的连线按钮（hover 状态节点后出现的小圆点/箭头图标）
-    - 或画布工具栏中的 "连线" 工具按钮
-  【操作步骤 — 按钮连线】
-    1. hover 源状态节点（如"草稿"），节点边缘出现连线锚点
-    2. 按住源状态节点的输出锚点（通常位于节点右侧/底部）
-    3. 拖拽到目标状态节点（如"待审批"）的输入锚点（通常位于节点左侧/顶部）
-    4. 释放鼠标完成连线
-  【操作步骤 — 工具栏连线】
-    1. click 画布工具栏中的 "连线" 工具
-    2. click 源状态节点
-    3. click 目标状态节点
-    4. 完成连线
-  【验证方法】两个状态节点之间出现带箭头的连线；hover 连线时高亮显示
-     注意：连线方向必须与业务流转一致（如 草稿→待审批→已完成）
-```
-
-### 7.4 用户动作添加
-
-```
-指令 7.4.1 — 在状态节点上添加用户动作
-  【目标】为某个状态节点添加可执行的用户动作（如提交、审批、退回）
-  【前置条件】目标状态节点已在画布上，状态连线已完成
-  【关键定位】
-    - 方式一：click 状态节点 → 右侧属性面板出现「动作列表」
-    - 方式二：hover 状态节点 → 节点上出现 "+动作" 按钮
+    - 生命周期详情页采用 ant-collapse 折叠面板布局，标题栏格式："进入条件 排 序 创 建"
+    - button "创 建"（页面有多个，需定位到对应 section 下的）
   【操作步骤】
-    1. click 目标状态节点（如"草稿"），右侧展开属性面板
-    2. 在属性面板中找到「动作」或「用户动作」区域
-    3. click "添加动作" 或 "+"
-    4. 填写动作信息：
-       - 动作名称（中文）：如 "提交"、"审批通过"、"退回修改"
-       - 动作 Code：action_ + 英文，如 action_Submit、action_Approve、action_Reject
-       - 目标状态：从下拉列表中选择执行此动作后跳转到的状态（如选择"待审批"）
-    5. click "确定" 保存动作
-    6. 重复步骤 1-5 为每个需要动作的状态添加
-  【验证方法】
-    - 右侧属性面板中动作列表显示已添加的动作及其目标状态
-    - 画布连线上可能出现动作标签
-    - 示例规则验证：
-        状态"草稿" + 动作"提交" → 目标"待审批" ✓
-        状态"待审批" + 动作"审批通过" → 目标"已完成" ✓
-        状态"待审批" + 动作"退回" → 目标"草稿" ✓
+    1. 在页面中找到「状态」表格区域
+       ⚠️ 注意：初始状态没有独立的"状态"section 标题，表格直接展示
+    2. 定位状态表格上方的 button "创 建"
+       方式一（推荐）：page.locator('.ant-table').first()
+                     .locator('..').locator('button').filter({ hasText: '创建' }).click()
+       方式二：直接用 getByRole('button', { name: '创 建' }) 点击
+       ⚠️ 页面有多个"创 建"按钮（进入条件/进入动作/用户动作各一个），需先定位状态表格区域
+  【验证方法】弹出状态创建表单（或跳转到创建页面），可见名称/Code/描述字段
+
+指令 7.2.2 — 填写状态信息
+  【目标】输入状态的中文名称、英文 Code 和描述
+  【前置条件】状态创建表单已打开
+  【关键定位】
+    - 名称：textbox "请输入名称" 或 getByPlaceholder('请输入名称')
+    - Code：textbox "请输入Code"
+    - 描述：textbox "请输入描述"（可选）
+  【操作步骤】
+    1. fill 名称：状态中文名，如 测试状态、草稿、审批中
+    2. fill Code：status_ + 英文，单词全部小写+下划线，如 status_test、status_draft
+    3. fill 描述（可选）：状态的说明文本
+  【验证方法】各输入框内容正确
+  Code 格式：单词全部小写；单词之间用下划线隔开；若单词太长则用缩写表示
+
+指令 7.2.3 — 保存状态
+  【目标】保存新建的状态
+  【前置条件】名称和 Code 已填写
+  【关键定位】button "save 保存"
+  【操作步骤】click button "save 保存"
+  【验证方法】页面回到生命周期详情页，状态表格中出现新创建的状态行
+    每个生命周期默认自带两个状态：开启（init_status__c）、关闭（complete_status__c）
+    状态表格列头：名称、Code、状态、描述、操作
+```
+
+### 7.2.2 进入状态详情页
+
+```
+指令 7.2.2.1 — 点击状态进入详情
+  【目标】从状态列表中点击某个状态名称，进入该状态的详情配置页
+  【前置条件】生命周期详情页的状态表格中有已创建的状态
+  【关键定位】状态表格行（.ant-table-row）第 1 列的状态名称链接（<a> 标签）
+  【操作步骤】
+    1. 在状态表格中定位目标状态行
+    2. click 该行的名称链接（第 1 列 <a>）
+       方式：page.getByText('测试状态', { exact: true }).click()
+    3. 或使用 page.locator('.ant-table-row').filter({ hasText: '测试状态' })
+              .locator('td').first().locator('a').click()
+  【验证方法】URL 变为 /admin/config/lifecycle/{lifecycleUuid}/status/{statusUuid}?__edit=2
+    页面面包屑：所有的生命周期 > 对象名生命周期 > 状态名
+    页面布局为 ant-collapse 折叠面板，包含以下 section（按顺序）：
+      - 详情（状态基本信息：名称、Code、状态、描述等）
+      - 进入条件（表格列头：执行方式、执行条件、操作）
+      - 进入动作（表格列头：描述、规则、状态、操作）
+      - 用户动作（表格列头：描述、规则、动作、操作）
+      - 状态权限：字段
+      - 状态权限：对象动作
+      - 状态权限：附件
+      - 状态权限：用户动作
+      - 状态权限：工作流
+      - 状态权限：关系
+      - 状态权限：审批矩阵
+```
+
+### 7.3 状态连线（待实际验证）
+
+> ⚠️ **说明**：状态连线操作在「状态流程」页面中进行，涉及 canvas 画布元素，当前尚未通过浏览器实操记录精确 DOM。以下描述基于产品手册推断，实际 Playwright selector 可能不同。
+
+```
+指令 7.3.1 — 打开状态流程页
+  【目标】进入状态流转图编辑页面
+  【前置条件】已在生命周期详情页
+  【关键定位】button "状态流程"
+  【操作步骤】click button "状态流程"
+  【验证方法】打开状态流转图画布，显示已有状态节点
+
+指令 7.3.2 — 连线操作（待实地验证）
+  连线需要 hover 源节点 → 拖拽锚点到目标节点，在 workflow canvas 上进行。
+  具体 Playwright 操作方式（page.mouse 拖拽 / canvas 内坐标计算）需实操确认。
+```
+
+### 7.4 用户动作
+
+```
+指令 7.4.1 — 创建用户动作
+  【目标】为状态添加用户可触发的动作按钮（呈现在业务端页面上）
+  【前置条件】已进入状态详情页，页面中「用户动作」折叠面板可见
+  【关键定位】
+    - 「用户动作」折叠面板：标题包含"用户动作 排 序 创 建"
+    - 创建按钮：定位到「用户动作」section 下的 button "创 建"
+      推荐：找到文本"用户动作"最近的 button "创 建"
+  【操作步骤】
+    1. 在「用户动作」section 中 click button "创 建"
+    2. 弹出创建表单，填写以下字段：
+       - 描述：动作的说明文本（如"提交审批"）
+       - 动作名称：呈现在业务端页面上的按钮文本（如"提交"）
+       - Code：action_ + 英文，如 action_submit
+       - 图标：选择按钮图标（可选，通常保持默认）
+       - 分组：通常选择「管理」（下拉选项）
+       - 动作类型：下拉选择动作类型 ⚠️ 关键配置
+         - 「修改状态」：需要额外指定目标状态（执行后状态流转到该状态）
+         - 其他类型按需求选择，不同动作类型后续参数不同
+    3. 填写完成后 click 保存（button "save 保存"）
+  【验证方法】「用户动作」表格中出现新创建的动作用，列头：描述、规则、动作、操作
+    用户动作行中「动作」列显示动作名称（按钮文本）
+    ⚠️ 新建的用户动作默认«规则»为「总是执行」
+
+指令 7.4.2 — ⚠️ 配置执行前校验规则（entry-action，用户动作子项）
+  【目标】为用户动作添加执行前的校验规则
+  【前置条件】用户动作已创建，「用户动作」表格中有该动作用行
+  【关键定位】用户动作表格行中「动作」列的链接（<a> 标签）
+  【操作步骤】
+    1. click 用户动作表格中目标行的「动作」列链接（动作名称的 <a> 标签）
+    2. URL 跳转到 /admin/config/lifecycle/{lifecycleUuid}/status/{statusUuid}/entry-action/{actionUuid}?__edit=2
+    3. 在 entry-action 详情页中，表格列头：名称、Code、状态、错误消息、消息显示位置、消息显示部分Code
+    4. 可为用户动作添加校验规则（点击对应按钮）
+       - 校验规则名称和 Code
+       - 错误消息：校验不通过时给用户的提示
+       - 消息显示位置/部分 Code：错误提示在页面上的显示位置
+    5. save 保存
+  【验证方法】entry-action 表格中出现新添加的校验规则行
+    面包屑显示：所有的生命周期 > 对象名 > 状态名 > 用户动作
 ```
 
 ### 7.5 阶段组创建
@@ -884,73 +969,89 @@ agent_created: true
   【验证方法】阶段组列表中出现新创建的阶段组；展开阶段组可看到关联的状态列表
 ```
 
-### 7.6 进入条件设置
+### 7.6 进入条件
 
 ```
-指令 7.6.1 — 设置状态进入条件
-  【目标】为状态或阶段组设置进入条件，控制状态流转的准入规则
-  【前置条件】生命周期状态已创建，用户动作已配置
-  【关键定位】click 状态节点 → 右侧属性面板 → 「进入条件」区域
+指令 7.6.1 — 创建进入条件
+  【目标】为状态设置进入条件，控制状态流转的准入规则
+  【前置条件】已进入状态详情页
+  【关键定位】
+    - 「进入条件」折叠面板：标题包含"进入条件 排 序 创 建"
+    - 创建按钮：button "创 建"（位于「进入条件」section 内）
+      推荐：找到文本"进入条件"最近的 button "创 建"
   【操作步骤】
-    1. click 目标状态节点，右侧展开属性面板
-    2. 找到「进入条件」或「入口条件」配置区域
-    3. click "添加条件" 或 "+"
-    4. 配置条件：
-       - 选择条件类型：如 "字段值条件"、"权限条件"
-       - 字段值条件示例：金额 > 10000 时才能进入"高级审批"状态
-       - 权限条件示例：仅质量负责人可进入"已关闭"状态
-    5. click "确定" 保存条件
-  【验证方法】属性面板中显示已配置的进入条件；条件不满足时应被阻止进入该状态
+    1. 在「进入条件」section 中 click button "创 建"
+    2. 配置进入条件（弹窗或页面表单）：
+       - 选择执行方式（两种）：
+         a. 总是执行：无条件触发条件检测
+         b. 有条件地执行：先满足前置条件，再执行条件检测；前置条件不满足则跳过
+       - 设置执行条件：选择字段 + 运算符 + 值
+         示例：字段 期望用餐时段 等于 [值]
+               字段 用餐内容 空值
+    3. 保存
+  【验证方法】「进入条件」表格中出现新条件行，列头：执行方式、执行条件、操作
+    示例行：总是执行 | 字段 期望用餐时段 等于
+           有条件地执行 | 字段 用餐内容 空值
+
+指令 7.6.2 — 查看/编辑已有进入条件
+  【目标】点击进入条件行查看详情或编辑
+  【关键定位】「进入条件」表格行中「执行条件」列的链接（<a> 标签）
+  【验证方法】进入条件行中执行条件为可点击链接
 ```
 
 ### 7.7 进入动作
 
 ```
-指令 7.7.1 — 配置状态进入动作
-  【目标】为生命周期状态配置进入时自动执行的操作
-  【前置条件】状态节点已创建，已完成生命周期画布的初始配置
+指令 7.7.1 — 创建进入动作
+  【目标】为状态配置进入时自动执行的操作
+  【前置条件】已进入状态详情页
   【关键定位】
-    - 状态节点：画布上的矩形状态框，click 后弹出属性面板
-    - 属性面板"进入动作"区域：面板下半部分，通常有"添加进入动作"或"+"按钮
-    - 动作类型下拉：包含发送通知/更新字段/创建记录/触发Web动作等
+    - 「进入动作」折叠面板：标题包含"进入动作 排 序 创 建"
+    - 创建按钮：button "创 建"（位于「进入动作」section 内）
   【操作步骤】
-    1. 在画布上 click 目标状态节点 → 右侧弹出属性面板
-    2. 在属性面板中找到"进入动作"区域
-    3. click "添加进入动作"按钮
-    4. 选择动作类型：
-       - 发送通知：选择消息模板 + 指定接收人（当前用户/指定角色/字段中的用户引用）
-       - 更新字段值：选择目标字段 + 设置新值（固定值/公式/引用其他字段）
-       - 创建关联记录：选择关联对象 + 设置字段映射
-       - 触发 Web 动作：选择已配置的 Web 动作
-    5. 填写动作所需参数（因类型而异）
-    6. 可添加多个进入动作，按顺序执行
-  【验证方法】属性面板中"进入动作"区域显示已添加的动作列表
+    1. 在「进入动作」section 中 click button "创 建"
+    2. 配置进入动作：
+       - 描述：动作说明文本（如"进入该状态时自动发送通知"）
+       - 规则（前置条件）：
+         a. 总是执行：进入状态即触发
+         b. 有条件地执行：满足前置条件后才触发
+       - 动作类型：下拉选择（发送通知/更新字段/创建记录/触发Web动作 等）
+         ⚠️ 不同动作类型后续需要填写的参数不同
+       - 状态：默认为「启用」
+    3. save 保存
+  【验证方法】「进入动作」表格中出现新动作行，列头：描述、规则、状态、操作
+    示例行：这是第一进入动作 | 总是执行 | 启用
+           这是第二个进入动作 | 有条件地执行 | 启用
+
+指令 7.7.2 — 查看/编辑已有进入动作
+  【目标】点击进入动作行查看详情或编辑
+  【关键定位】「进入动作」表格行中「描述」列的链接（<a> 标签）
+  【验证方法】进入动作行中描述为可点击链接，点击后跳转编辑页
 ```
 
 ### 7.8 保存并激活生命周期
 
 ```
 指令 7.8.1 — 保存生命周期
-  【目标】保存所有生命周期配置（状态、连线、动作、条件、进入动作）
-  【前置条件】所有状态节点、连线、动作已配置完成
+  【目标】保存所有生命周期配置（状态、条件、动作）
+  【前置条件】所有配置已确认无误
   【关键定位】button "save 保存"
   【操作步骤】click "save 保存"
   【验证方法】
-    1. URL 跳转到对象生命周期列表页
-    2. 列表中出现刚配置的生命周期名称/Code
-    3. 重新进入生命周期编辑页，所有状态节点、连线、动作均保留
+    1. URL 可能跳转或保持在详情页
+    2. 确认各 section 中的表格数据均保留
 ```
 
 ### 7.9 生命周期完整配置示例
 
 > 以下为一个典型审批流程的生命周期配置示例，供 Agent 参考：
 
-| 状态 | Code | 初始 | 阶段组 | 用户动作（动作→目标） |
-|------|------|:----:|--------|----------------------|
-| 草稿 | status_Draft | ✓ | — | 提交（action_Submit）→ 待审批 |
-| 待审批 | status_Pending | — | 审批阶段 | 审批通过（action_Approve）→ 已完成 / 退回（action_Reject）→ 草稿 |
-| 已完成 | status_Done | — | — | 关闭（action_Close）→ 已关闭；进入动作：发送通知给申请人 |
-| 已关闭 | status_Closed | — | 关闭阶段 | — |
+| 状态 | Code | 初始 | 进入条件 | 进入动作 | 用户动作 |
+|------|------|:----:|----------|----------|----------|
+| 草稿 | status_Draft | ✓ | — | — | 提交（action_Submit）→ 待审批 |
+| 待审批 | status_Pending | — | 字段 审批金额 大于 1000 | 发送通知给审批人 | 审批通过（修改状态）→ 已完成 / 退回（修改状态）→ 草稿 |
+| 已完成 | status_Done | — | — | 发送通知给申请人 | 关闭（修改状态）→ 已关闭 |
+| 已关闭 | status_Closed | — | — | — | — |
 
 ```
 
@@ -1291,7 +1392,9 @@ agent_created: true
 
 ## 十、配置编号规则
 
-> **URL 直达**：`/admin/config/code-rules/list`
+> **创建页 URL 直达**：`/admin/config/code-rules/base`
+> **列表页 URL**：`/admin/config/code-rules/list`
+> ⚠️ **核心发现**：编号模式不是 textarea 手写表达式，而是通过 UI 工具栏逐项添加组件（固定字符/日期/流水号/字段/相关对象字段），组件按添加顺序组成编号模式。
 
 ### 10.1 进入编号规则列表
 
@@ -1299,98 +1402,131 @@ agent_created: true
 指令 10.1.1 — URL 直达
   【目标】导航到编号规则管理页面
   【前置条件】已登录管理端
-  【关键定位】URL：`/admin/config/code-rules/list`
-  【操作步骤】navigate 到 `/admin/config/code-rules/list`
-  【验证方法】页面标题/面包屑显示"编号规则"
+  【关键定位】URL：/admin/config/code-rules/list
+  【操作步骤】navigate → /admin/config/code-rules/list
+  【验证方法】页面显示编号规则列表表格，列头：名称、Code、对象、状态、使用位置、操作
 ```
 
 ### 10.2 创建编号规则
 
 ```
-指令 10.2.1 — 点击创建
+指令 10.2.1 — 进入创建页面
   【目标】进入编号规则创建表单
   【前置条件】已在编号规则列表页
-  【关键定位】button "创 建"（注意中间有空格）
-  【操作步骤】click button "创 建"
-  【验证方法】进入编号规则编辑页，表单显示名称/Code/编号模式/绑定对象等字段
+  【关键定位】button "创 建"（注意中间空格）
+  【操作步骤】
+    方式一：click button "创 建"
+    方式二（推荐）：navigate → /admin/config/code-rules/base
+  【验证方法】页面标题为"规则列表创建"，表单显示「详情」折叠面板
 
 指令 10.2.2 — 填写名称
   【目标】输入编号规则的中文显示名称
-  【前置条件】编号规则创建表单已打开
-  【关键定位】textbox "请输入此字段"（名称输入框）
+  【关键定位】getByPlaceholder('请输入名称')
   【操作步骤】fill 填入中文名称
-    示例：原料药生命周期项目编号
   【验证方法】名称输入框中显示已填入的中文名
 
 指令 10.2.3 — 填写 Code
   【目标】输入编号规则的英文标识代码
-  【前置条件】名称已填写
-  【关键定位】textbox "请输入Code"
-  【操作步骤】fill 填入英文代码
-    格式：code_ + 英文名
-    示例：code_api_project
-  【验证方法】Code 输入框中显示已填入的英文代码
+  【关键定位】getByRole('textbox', { name: '请输入Code' })
+  【操作步骤】fill 填入英文代码，格式：code_ + 英文名
 
-指令 10.2.4 — 填写编号模式表达式
-  【目标】输入编号生成规则表达式，定义编号的组成格式
-  【前置条件】创建表单已打开
-  【关键定位】textbox 或 textarea（编号模式输入框）
-  【操作步骤】fill 填入编号模式表达式
-    语法见 10.3 编号模式语法速查
-    常用组合示例：
-      - PFX('API')+DATE(YYYYMM)+SEQ(3) → API202607001
-      - TYPE1+PFX('-SG')+SEQ(2) → API202607001-SG01
-      - DATE(YYMMDD)+PFX('-')+SEQ(4) → 260713-0001
-  【验证方法】输入框中显示已填入的表达式
-
-指令 10.2.5 — 选择绑定对象
-  【目标】将编号规则绑定到目标对象，使该对象的记录自动生成编号
-  【前置条件】目标对象已创建（Code 已知）
-  【关键定位】combobox（绑定对象选择器，可搜索）
+指令 10.2.4 — 选择绑定对象
+  【目标】将编号规则绑定到目标对象
+  【前置条件】目标对象已创建
+  【关键定位】第 2 个 .ant-select-selector（索引 1）
+    定位代码：page.locator('.ant-select-selector').nth(1).click()
   【操作步骤】
-    1. click combobox 打开下拉
-    2. 用 keyboard.insertText 输入对象名称关键词
-    3. press Enter 选中目标对象
-  【验证方法】combobox 中显示已选中的对象名称
+    1. click 对象下拉 → wait 600ms
+    2. keyboard.insertText('对象名关键词') → Enter
+    3. wait 1500ms
+  【验证方法】下拉中显示已选中的对象名称，*编号规则 section 出现
 
-指令 10.2.6 — 设置起始值
-  【目标】设置编号流水号的起始值
-  【前置条件】编号模式中包含 SEQ() 函数
-  【关键定位】数字 textbox（起始值输入框，默认 1）
-  【操作步骤】fill 填入起始数字（通常保持默认 1）
-  【验证方法】输入框中显示起始值
+指令 10.2.5 — ⚠️ 添加编号规则组件（UI 工具栏方式）
+  【目标】逐项添加编号组件，按添加顺序组成编号模式
+  【前置条件】已选择绑定对象，*编号规则 section 可见
+  【关键定位】
+    - 展开类型列表：button "添加规则"
+    - 类型列表：<LI class="ant-list-item"> 5 个类型项
+      - 添加流水号
+      - 添加固定字符
+      - 添加日期
+      - 添加字段
+      - 添加相关对象字段
+    - 每次添加后类型列表关闭，需重新点 button "添加规则" 展开
+  【操作步骤】
+    1. click button "添加规则" → 展开 5 个类型项
+    2. click 目标 LI：page.locator('li').filter({ hasText: '添加固定字符' }).first().click({ force: true })
+       ⚠️ 必须 force: true — LI 元素在展开后可能被 Playwright 判定为不可见
+    3. 等待组件表单行出现
+    4. 填写该组件的参数（见 10.2.6）
+    5. 重复步骤 1-4 添加下一个组件
+  【验证方法】每个组件行显示在 *编号规则 section 中，预览区实时更新
 
-指令 10.2.7 — 设置步长
-  【目标】设置编号流水号的递增步长
-  【前置条件】编号模式中包含 SEQ() 函数
-  【关键定位】数字 textbox（步长输入框，默认 1）
-  【操作步骤】fill 填入步长（通常保持默认 1）
-  【验证方法】输入框中显示步长值
+指令 10.2.6 — 填写各类组件参数
+  【目标】根据组件类型填写对应参数
 
-指令 10.2.8 — 保存编号规则
+  各组件参数速查：
+
+  | 组件类型 | 参数字段 | 定位方式 |
+  |----------|----------|----------|
+  | 固定字符 | 1 个 text input | 在 `.ant-form-item` 中找 label 含"固定字符"的 input |
+  | 流水号 | *位数、*起始值、*步长（各 1 个 text input） | 在 `.ant-form-item` 中找 label 含"*位数"/"*起始值"/"*步长"的 input |
+  | 日期 | 日期格式（select/input） | 待验证 |
+  | 字段 | 字段选择（select） | 待验证 |
+  | 相关对象字段 | 相关对象 + 字段（select） | 待验证 |
+
+  辅助函数 fillByLabel（通过 label 文字定位 input）：
+    const items = await page.locator('.ant-form-item').all();
+    for (const item of items) {
+      const label = await item.locator('label').textContent().catch(() => '');
+      if (label.includes('固定字符')) {
+        await item.locator('input').first().fill('RC');
+        break;
+      }
+    }
+  或在已知 input 顺序时直接用 nth：
+    // input[2] = 固定字符 (0=名称, 1=Code, 2=固定字符)
+    // input[3] = 位数, input[4] = 起始值, input[5] = 步长
+    page.locator('input.ant-input:not([type="search"])').nth(2).fill('AI');
+
+  【验证方法】预览区显示编号格式如 RC{00000001}
+
+指令 10.2.7 — 保存编号规则
   【目标】保存编号规则配置
-  【前置条件】名称、Code、编号模式、绑定对象均已填写
-  【关键定位】button "save 保存"
-  【操作步骤】click button "save 保存"
-  【验证方法】保存后回到列表，确认新规则出现在表格中
+  【前置条件】名称、Code、绑定对象、至少一个规则组件已配置
+  【关键定位】button "保存"
+  【操作步骤】click button "保存"
+  【验证方法】保存后跳回 /admin/config/code-rules/list，新规则出现在表格第一行
+    规则包含流水号时，列表「使用位置」列显示绑定的字段名
 ```
 
-### 10.3 编号模式语法速查
+### 10.3 编号规则完整交互流程图
 
-| 函数 | 说明 | 示例 |
-|------|------|------|
-| PFX('固定前缀') | 固定前缀 | PFX('API') |
-| DATE(YYYYMM) | 日期（年月） | DATE(YYYYMM) → 202607 |
-| DATE(YYMMDD) | 日期（年月日） | DATE(YYMMDD) → 260713 |
-| SEQ(位数) | 流水号（自动递增） | SEQ(3) → 001, 002, 003... |
-| TYPE{n} | 引用第 n 个关联对象的编号前缀 | TYPE1 → 父对象编号前缀 |
-
-**常用组合示例**：
-- PFX('API')+DATE(YYYYMM)+SEQ(3) → API202607001
-- TYPE1+PFX('-SG')+SEQ(2) → API202607001-SG01（子对象引用父编号）
-- DATE(YYMMDD)+PFX('-')+SEQ(4) → 260713-0001
+```
+navigate → /admin/config/code-rules/base
+    ↓
+fill 名称 + Code
+    ↓
+click .ant-select-selector.nth(1) → 搜索选择对象
+    ↓ (选完后出现 *编号规则 区)
+click "添加规则" → 展开 5 个 LI
+    ↓
+click LI "添加固定字符" (force: true) → 组件行出现
+    ↓
+fill 固定字符 input (label 定位) → 值填入
+    ↓
+click "添加规则" → 再次展开
+    ↓
+click LI "添加流水号" (force: true) → 流水号行出现
+    ↓
+fill *位数 / *起始值 / *步长 → 预览更新
+    ↓
+click "保存" → 跳回列表 √
+```
 
 ---
+
+
 
 ## 十一、验证测试
 
@@ -1552,7 +1688,95 @@ agent_created: true
     3. getByPlaceholder 比 getByRole('textbox', { name: ... }) 更稳定
       （在 Ant Design 表单中，placeholder 始终存在且唯一）
   建议：字段创建时优先用 getByPlaceholder 而非 getByRole textbox
-```
+
+技巧 B.17 — 生命周期模块踩坑经验
+  1. 生命周期命名规则：对象名 + "生命周期"，Code 为 object_code_lifecycle__c
+  2. 列表搜索必须用 { exact: true }，否则会模糊匹配到名称相似的其他生命周期
+  3. 生命周期详情页是 ant-collapse 折叠面板，不是画布；状态创建/进入条件/进入动作/用户动作各自独立 section
+  4. 页面有多个 button "创 建"，需按 section 标题精确定位到对应的按钮
+  5. 进入条件/进入动作/用户动作 均支持「总是执行」和「有条件地执行」两种执行方式
+  6. 用户动作创建表单有 6 个字段（描述/动作名称/Code/图标/分组/动作类型），动作类型决定是否需要填写目标状态
+  7. 用户动作下有 entry-action 子项（执行前校验规则），点击用户动作行「动作」列链接进入
+  8. 状态详情页有 11 个折叠 section，除进入条件/进入动作/用户动作外还有 6 类状态权限 panel
+
+技巧 B.18 — 生命周期三模块 URL 直达与表单实战（2026-07-15 实操记录）
+  ⚠️ 核心发现：进入条件/进入动作/用户动作各有独立的 URL 模式，可直接 navigate 跳过 UI 点击：
+
+  | 模块 | URL 模式（创建） | 保存后 URL 模式 |
+  |------|-----------------|----------------|
+  | 进入条件 | `/status/{id}/entry-condition/00000000-0000-0000-0000-000000000000?__edit=1` | `/status/{id}/entry-condition/{uuid}?__edit=2` |
+  | 进入动作 (entry-reaction) | `/status/{id}/entry-reaction/00000000-0000-0000-0000-000000000000?__edit=1` | `/status/{id}/entry-reaction/{uuid}?__edit=2` |
+  | 用户动作 (entry-action) | `/status/{id}/entry-action/00000000-0000-0000-0000-000000000000?__edit=1` | `/status/{id}/entry-action/{uuid}?__edit=2` |
+  | 创建状态 | `/lifecycle/{id}/status/00000000-0000-0000-0000-000000000000` | `/lifecycle/{id}/status/{uuid}?__edit=2` |
+
+  ⚠️ 进入条件 (entry-condition) 表单结构：
+    - Radio：总是执行 / 有条件地执行
+    - button "新 增" → 弹出规则编辑器：
+      1. 第 1 个 Select → 条件类型：字段 / 相关对象
+      2. 第 2 个 Select → 选择具体字段（对象的所有字段）
+      3. 第 3 个 Select → 运算符（等于/不等于/大于/小于/空值 等）
+      4. 若选「等于」等需值的运算符 → 第 4 个 Select 或 Input（值输入）
+    - textarea "请输入当不满足条件时，弹出以下提示消息" → 校验失败提示语
+    - 坑：Select 弹出后选项列表重叠，直接用 .ant-select-item-option-content click 会超时
+    - 解决：用 keyboard.insertText('关键词') + Enter 选择，或 evaluate 定位可见 dropdown 内的选项
+
+  ⚠️ 进入动作 (entry-reaction) 表单结构：
+    - textbox "请输入描述"
+    - Radio：总是执行 / 有条件地执行
+    - 第 1 个 Select：动作类型（约 130 种：发送通知/修改记录字段/修改状态/发起工作流...）
+    - 不同动作类型展开不同子表单，如「发送通知」→ 通知模板 Select + 收件人 Select
+    - button "添加动作" → 可添加多个动作（⚠️ 不要误点：填完第一个动作直接保存即可）
+    - 坑：选「添加动作」后再保存会因为新增的空槽位缺少必填项而失败
+
+  ⚠️ 用户动作 (entry-action) 表单结构：
+    - textbox "请输入描述"、textbox "请输入动作名称"、textbox "请输入Code"
+    - 第 0 个 Select：图标（可跳过，默认图标即可）
+    - 第 1 个 Select：分组（通常选"管理"）
+    - 第 2 个 Select：动作类型（修改状态/发起工作流 等）
+    - 第 3 个 Select：*状态（选「修改状态」后出现）→ 目标状态（开启/关闭/自定义状态）
+    - checkbox "确认提示"、"是否常用动作"、"不显示在操作栏"
+    - 坑：图标 Select 下拉层叠遮挡后续 Select，用 { force: true } 跳过图标
+
+  ⚠️ Ant Select 下拉重叠通用解决方案：
+    问题：页面有多个 Ant Select 组件，打开一个后弹出 dropdown 叠加在页面上方，
+         导致后续 Select 被遮挡，click 时报 "element intercepts pointer events"
+    方案一（推荐）：keyboard.insertText 搜索 + Enter 选择，不依赖可见性
+    方案二：evaluate 关闭所有 dropdown → click → evaluate 在可见 dropdown 中定位选项
+    方案三：click({ force: true }) 跳过遮挡检测
+
+技巧 B.19 — 编号规则组件交互（2026-07-15 实操记录）
+  ⚠️ 核心发现：编号规则不是 textarea 写表达式，而是 UI 工具栏逐项添加组件：
+
+  1. 创建页 URL: `/admin/config/code-rules/base`
+  2. 选完绑定对象后才会出现 `*编号规则` section
+  3. 点 `button "添加规则"` → 展开 5 个 `<LI>` 类型项（添加流水号/固定字符/日期/字段/相关对象字段）
+  4. LI 元素需 `click({ force: true })` — 展开后 Playwright 可能判定为不可见
+  5. 每次添加一个组件后类型列表关闭，需重新点 `添加规则` 展开
+  6. 组件 input 无 placeholder，需通过 `.ant-form-item` + label 文字定位
+     - 固定字符: label 含"固定字符"的 input
+     - 流水号: label 含"*位数"/"*起始值"/"*步长"的各 input
+  7. React 受控组件不能用 evaluate + nativeInputValueSetter 设值（值会被重置）
+  8. 预览区实时显示编号格式如 `RC{00000001}`
+  9. 保存后跳回 `/admin/config/code-rules/list`
+
+技巧 B.20 — 浏览器进程管理红线（2026-07-15）
+  ❌ 绝对禁止：`Get-Process -Name "chrome" | Stop-Process -Force`
+    或任何 killall / taskkill 无差别终止 Chrome 进程的命令。
+    原因：Playwright 启动的 Chromium 实例是用户机器上 Chrome 的子进程，
+    无差别杀进程会连带关闭用户自己打开的浏览器窗口，导致数据丢失。
+  
+  ✅ 正确清理方式：
+    1. `chromium.launch()` 启动 → 脚本结束时浏览器自动关闭
+       - 执行模式：正常 await browser.close()，用完即关
+       - 调试模式：不调用 close()，保持 CDP 端口活跃等用户操作
+    2. `chromium.connectOverCDP()` 连接 → 仅关闭连接，不杀浏览器进程
+       - `browser.close()` 断开 CDP 连接，浏览器窗口保留
+    3. 必须清理残留进程时：用 Playwright API
+       ```js
+       const browser = await chromium.connectOverCDP('http://localhost:9222');
+       await browser.close(); // 仅关 Playwright 连接的实例
+       ```
+    4. 脚本异常退出时：node 进程退出自动清理其 launch() 的子进程
 
 ## 附录 C：配置顺序检查清单（Agent 自检用）
 
@@ -1594,6 +1818,12 @@ agent_created: true
 | [`create-object.js`](scripts/create-object.js) | 创建对象 | `createObject(page, opts)` | `node create-object.js --name --code --lifecycle` |
 | [`create-field.js`](scripts/create-field.js) | 创建单个字段 | `createField(page, opts)` | `node create-field.js --name --code --dataType --objectName ...` |
 | [`save-and-verify.js`](scripts/save-and-verify.js) | 保存+验证 | `saveAndVerify(page, opts)` | `node save-and-verify.js --expectedUrlPattern ...` |
+| [`lifecycle.js`](scripts/lifecycle.js) | 生命周期统一入口（含 4 子模块） | `createStatus`, `createEntryCondition`, `createEntryReaction`, `createUserAction`, `selectAntOption` | —（编排模块） |
+| [`lifecycle-create-state.js`](scripts/lifecycle-create-state.js) | 创建生命周期状态 | `createStatus(page, opts)` | `node lifecycle-create-state.js --lifecycleId --name --code` |
+| [`lifecycle-entry-condition.js`](scripts/lifecycle-entry-condition.js) | 创建进入条件 | `createEntryCondition(page, opts)` | `node lifecycle-entry-condition.js --lifecycleId --statusId --condField --errorMsg` |
+| [`lifecycle-entry-reaction.js`](scripts/lifecycle-entry-reaction.js) | 创建进入动作 | `createEntryReaction(page, opts)` | `node lifecycle-entry-reaction.js --lifecycleId --statusId --actionType` |
+| [`lifecycle-entry-action.js`](scripts/lifecycle-entry-action.js) | 创建用户动作 | `createUserAction(page, opts)` | `node lifecycle-entry-action.js --lifecycleId --statusId --actionName --code` |
+| [`code-rule.js`](scripts/code-rule.js) | 创建编号规则 | `createCodeRule(page, opts)` | `node code-rule.js --name --code --objectName --rules` |
 
 ### 辅助模块
 
@@ -1607,14 +1837,12 @@ agent_created: true
 
 ### 待攻克模块（🔜 暂无脚本，需人带领 AI 收集 DOM/API）
 
-以下 4 个复杂配置模块因涉及 canvas 拖拽、dnd-kit 拦截、UI 组件逐项添加等 Playwright 自动化难点，当前无可用脚本，仅记录攻克思路：
+以下 2 个复杂配置模块因涉及 canvas 拖拽、dnd-kit 拦截等 Playwright 自动化难点，当前无可用脚本，仅记录攻克思路：
 
 | 模块 | 难点 | 攻克路线 |
 |------|------|----------|
-| **生命周期连线+动作** | canvas 上状态连线无法用 `page.click` 定位；用户动作/进入条件/进入动作面板 DOM 结构未知 | ① 人带领进入生命周期画布 ② 收集连线按钮/面板的 DOM 定位 ③ 同步录制 Network POST 请求寻找 API |
 | **工作流节点+连线** | 节点拖拽、连线操作均在 canvas 上；触发条件（对象选择+生命周期动作绑定）DOM 复杂 | ① 收集节点目录的定位方式 ② 探索 `page.mouse` 模拟拖拽 ③ 录制创建/保存的 API |
 | **表单布局拖拽** | Ant Design 使用 dnd-kit 库，`page.dragAndDrop` 被拦截 | ① 需模拟 dnd-kit 的 `mousedown → mousemove → mouseup` 事件序列 ② gridSpan/ section type 的 combobox 定位 |
-| **编号规则 UI 操作** | 编号模式非简单 textarea，而是逐项添加的 UI 组件（类型选择+参数+删除） | ① 收集每项的添加按钮/类型 dropdown/参数 input 定位 ② 录制保存 API |
 
 ### 调用示例
 
@@ -1629,22 +1857,43 @@ node .trae/skills/akso-basic-config/scripts/login.js \
 node .trae/skills/akso-basic-config/scripts/create-object.js \
   --name "测试对象" --code "test_obj" --lifecycle
 
+# 创建生命周期状态（直接运行）
+node .trae/skills/akso-basic-config/scripts/lifecycle-create-state.js \
+  --lifecycleId 3a226cb3-8d3e-4fb8-12a1-e84ff79b1c45 --name "步骤1" --code "status_step1__c"
+
 # 在编排脚本中 require 使用
 const { login } = require('./scripts/login');
 const { createObject } = require('./scripts/create-object');
+const lifecycle = require('./scripts/lifecycle');
 const { launchBrowser, closeBrowser } = require('../../shared/browser-manager');
 
 const { browser, page } = await launchBrowser();
 await login(page, { baseUrl, username, password });
-const result = await createObject(page, { name: '测试对象', code: 'test_obj', enableLifecycle: true });
+
+const obj = await createObject(page, { name: '测试对象', code: 'test_obj', enableLifecycle: true });
+const st = await lifecycle.createStatus(page, { lifecycleId: 'xxx', name: '步骤1', code: 'status_step1__c' });
+await lifecycle.createEntryCondition(page, { lifecycleId: 'xxx', statusId: st.statusId, condField: '标题' });
+await lifecycle.createEntryReaction(page, { lifecycleId: 'xxx', statusId: st.statusId, actionType: '发送通知' });
+await lifecycle.createUserAction(page, { lifecycleId: 'xxx', statusId: st.statusId, actionName: '提交', code: 'action_submit' });
+
 await closeBrowser(browser);
 ```
 
 ---
 
-> **版本**：v5.2 — Playwright npm 包统一执行版
-> **更新日期**：2026-07-14  
-> **更新内容（v5.2 — Playwright npm 包统一执行）**：
+> **版本**：v5.3 — 生命周期 DOM 实测版
+> **更新日期**：2026-07-15
+> **更新内容（v5.3 — 生命周期 DOM 实测版）**：
+> - 🔄 **第七章全量重写**：基于浏览器实操记录的生命周期配置 DOM 精确定位
+>   - 7.1「进入生命周期」补全列表搜索/精确匹配定位（`getByPlaceholder('请输入查询条件')` + `{ exact: true }`）
+>   - 7.2「创建状态」替换错误画布描述，改为实际 UI：状态表格→`button "创 建"`→表单（名称/Code/描述）→`save 保存`
+>   - 7.2.2 新增「进入状态详情页」小节，记录 URL 模式和 11 个折叠 section 结构
+>   - 7.3「状态连线」标记为「待实际验证」，保留操作指引
+>   - 7.4「用户动作」重写：创建表单字段（描述/动作名称/Code/图标/分组/动作类型）+ entry-action 校验规则子项
+>   - 7.6「进入条件」重写：`总是执行` vs `有条件地执行` 两种执行方式 + 表单结构
+>   - 7.7「进入动作」重写：描述/规则/动作类型/状态的配置方式
+> - 📝 7.9「完整配置示例表」扩充列：新增进入条件/进入动作列
+> - 📝 附录 B 新增 B.17 生命周期踩坑经验
 > - 🔄 **执行架构统一**：从 `playwright-cli` + MCP `browser_run_code_unsafe` 统一为 Playwright npm 包（`require('playwright')`）
 > - 🆕 **新增 `shared/browser-manager.js`**：统一浏览器启动/登录/关闭管理
 > - 🔧 **所有 scripts/*.js 重构**：从 CLI `async(page)=>{}` 模式改为 Node.js 模块，支持 `require` 引入和直接 `node` 执行
