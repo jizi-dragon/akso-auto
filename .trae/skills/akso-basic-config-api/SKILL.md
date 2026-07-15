@@ -496,7 +496,7 @@ const { saveFormLayout } = require('./scripts/save-form-layout');
 -- 步骤1：创建列表布局
 POST /api/platform/Listlayout/Save
 请求：{ status:1, source:3, sortFields:[], name:"列表名", code:"code__c", objectTypeId:"uuid", objectId:"uuid" }
-响应：data: "新建的 listlayoutId"
+响应：data: { id: "新建UUID" }  ⚠️ 返回对象非字符串！取 resp.data.id
 
 -- 步骤2：添加显示列
 POST /api/platform/Listlayout/AddColumns

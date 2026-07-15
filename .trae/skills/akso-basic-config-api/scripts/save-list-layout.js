@@ -28,7 +28,7 @@ async function saveListLayout(page, { name, code, objectId, objectTypeId }) {
   });
   return {
     success: isSuccess(resp),
-    layoutId: resp.data,
+    layoutId: resp.data?.id || resp.data,
     message: isSuccess(resp) ? `列表[${name}]创建成功` : resp.message,
     result: resp
   };
