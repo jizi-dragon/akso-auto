@@ -20,8 +20,9 @@ const path = require('path');
 const fs = require('fs');
 const { launchBrowser, login, closeBrowser } = require('../../shared/browser-manager');
 const { parseOutline, createChapters, designChapter } = require('./lib/chapter-automation');
-const { createState, approve, readState, requireApproval } = require('./lib/state-manager');
+const { createState, approve, readState, requireApproval, markReviewed } = require('./lib/state-manager');
 const { extractOutline } = require('./lib/extract-outline');
+const { reviewQuality, formatReviewReport } = require('./lib/review-outline');
 
 const EXTRACT_SCRIPT = path.join(__dirname, 'lib', 'extract-outline.py');
 
@@ -53,10 +54,15 @@ function checkDocxOnly(inputPath) {
 
 async function doExtract(config) {
   if (!config.input) { console.error('缺少 --input <docx路径>'); process.exit(1); }
-  if (!config.output) { console.error('缺少 --output <输出路径>'); process.exit(1); }
 
   checkDocxOnly(config.input);
   if (!fs.existsSync(config.input)) { console.error(`文件不存在: ${config.input}`); process.exit(1); }
+
+  // 输出文件名默认关联源文档名
+  if (!config.output) {
+    const base = path.basename(config.input, '.docx');
+    config.output = path.join(path.dirname(config.input), '大纲_' + base + '.txt');
+  }
 
   console.log(`[提取] 输入: ${config.input}`);
   console.log(`[提取] 输出: ${config.output}`);
@@ -89,10 +95,26 @@ async function doExtract(config) {
     chapterCount = toc.length;
   } catch {}
 
-  createState(config.output, { inputPath: config.input, chapterCount });
+  // 自动执行审查
+  let reviewIssues = 0;
+  try {
+    const fullText = fs.readFileSync(config.output, 'utf-8');
+    const review = reviewQuality(fullText);
+    reviewIssues = review.summary?.totalIssues || 0;
+    if (reviewIssues > 0) {
+      console.log('\n' + formatReviewReport(review));
+    } else {
+      console.log('\n[审查] ✅ 未检测到结构问题');
+    }
+  } catch (e) {
+    console.log('\n[审查] 跳过: ' + e.message);
+  }
+
+  createState(config.output, { inputPath: config.input, chapterCount, reviewed: true, reviewIssues });
 
   console.log(`\n[提取] 完成 → ${config.output}`);
   console.log(`[提取] 章节数: ${chapterCount}`);
+  if (reviewIssues > 0) console.log(`⚠ 审查发现问题 ${reviewIssues} 处，请检查上述报告后修订大纲`);
   console.log(`\n========================================`);
   console.log(`  请审查 "${path.basename(config.output)}"，确认无误后执行:`);
   console.log(`  node tools/qrs-report-creator/index.js approve --outline "${config.output}"`);
@@ -154,13 +176,15 @@ function printUsage() {
 QRS 回顾报告创建工具 — 两步审批流程
 
 流程:
-  1. extract  从 .docx 提取文档大纲（生成完整大纲.txt）
-  2. approve  审查大纲后标记审批通过
-  3. create   在系统中批量创建章节（须已审批）
-  4. design   逐章设计内容，写入 ONLYOFFICE 编辑器（须已审批）
+  1. extract  从 .docx 提取文档大纲（生成完整大纲.txt + 自动审查）
+  2. review   二次审查大纲结构质量问题
+  3. approve  审查大纲后标记审批通过
+  4. create   在系统中批量创建章节（须已审批）
+  5. design   逐章设计内容，写入 ONLYOFFICE 编辑器（须已审批）
 
 命令:
-  extract   从 .docx 提取文档大纲
+  extract   从 .docx 提取文档大纲（含自动审查）
+  review    审查大纲结构质量
   approve   标记大纲已审批
   status    查看当前审批状态
   create    在系统中批量创建章节目录
@@ -173,7 +197,7 @@ QRS 回顾报告创建工具 — 两步审批流程
 
 extract 参数:
   --input     .docx 模板文件路径（仅支持 .docx）
-  --output    输出大纲文件路径
+  --output    输出大纲文件路径（可选，默认 大纲_<文档名>.txt）
 
 approve 参数:
   --outline   大纲文件路径
@@ -214,6 +238,20 @@ async function main() {
   // ---- 不需要浏览器的命令 ----
   if (cmd === 'extract') {
     await doExtract(config);
+    return;
+  }
+
+  if (cmd === 'review') {
+    const outlinePath = config.outline || config.output;
+    if (!outlinePath) { console.error('缺少 --outline <大纲文件路径>'); process.exit(1); }
+    if (!fs.existsSync(outlinePath)) { console.error(`大纲文件不存在: ${outlinePath}`); process.exit(1); }
+
+    const fullText = fs.readFileSync(outlinePath, 'utf-8');
+    const review = reviewQuality(fullText);
+    console.log(formatReviewReport(review));
+    if (review.summary?.totalIssues > 0) {
+      console.log(`\n💡 发现 ${review.summary.totalIssues} 个问题，建议修正后再审批。`);
+    }
     return;
   }
 

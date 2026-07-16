@@ -1,8 +1,9 @@
 /**
- * 纯 Node.js .docx 大纲提取器
- * 
+ * 纯 Node.js .docx 大纲提取器（v2 — 双遍解析版）
+ *
  * 替代 extract-outline.py，无需 Python 依赖。
  * 通过 PowerShell 解压 docx → 解析 word/document.xml → 提取章节结构
+ * v2: 双遍解析，遍历 <w:body> 下所有 <w:p>、<w:tbl>、<w:sdt> 子元素
  */
 
 const { execSync } = require('child_process');
@@ -10,87 +11,170 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const CHAPTER_STYLES = new Set(['Title', 'Heading1', 'Heading2', '1', '2', '3']);
+// 仅 Title、Heading1 和数字编号样式可产生 chapter 级标题
+const CHAPTER_STYLES = new Set(['Title', 'Heading1', '1', '2', '9']);
+// 所有可被识别为标题的样式
+const HEADING_STYLES = new Set(['Title', 'Heading1', 'Heading2', '1', '2', '3', '9', '26', '23']);
 const ATTACHMENT_KEYWORDS = ['附件', '附表'];
 const INDENT = '\u3000\u3000';
 
-function extractOutline(inputPath, outputPath) {
-  const tempDir = path.join(os.tmpdir(), 'qrs_extract_' + Date.now());
-  
-  try {
-    // Step 1: 解压 docx（PowerShell Expand-Archive 不支持 .docx 扩展名，需先拷贝为 .zip）
-    fs.mkdirSync(tempDir, { recursive: true });
-    const tempZip = path.join(tempDir, 'temp.zip');
-    fs.copyFileSync(inputPath, tempZip);
-    execSync(`powershell -Command "Expand-Archive -Path '${tempZip}' -DestinationPath '${tempDir}' -Force"`, { stdio: 'pipe' });
-    fs.unlinkSync(tempZip);
-    
-    const docXmlPath = path.join(tempDir, 'word', 'document.xml');
-    if (!fs.existsSync(docXmlPath)) throw new Error('document.xml not found in docx');
-    
-    const xmlContent = fs.readFileSync(docXmlPath, 'utf-8');
-    
-    // Step 2: 解析段落
-    const paragraphs = parseParagraphs(xmlContent);
-    
-    // Step 3: 提取章节
-    const sections = extractSections(paragraphs);
-    
-    // Step 4: 格式化输出
-    const output = formatOutput(inputPath, sections);
-    const outDir = path.dirname(path.resolve(outputPath));
-    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-    fs.writeFileSync(outputPath, output, 'utf-8');
-    
-    // Step 5: 打印摘要
-    const chapterCount = sections.filter(s => s.type === 'chapter').length;
-    console.log(`总章节数: ${chapterCount}`);
-    sections.forEach(s => {
-      const labels = [];
-      if (s.is_implicit) labels.push('[隐式]');
-      if (s.is_attachment) labels.push('[附件]');
-      console.log(`  ${s.type} ${s.sec_num.padEnd(8)} ${labels.join(' ')} ${s.clean_title}`);
-    });
-    
-    return { success: true, chapterCount };
-    
-  } finally {
-    // 清理临时目录
-    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+/**
+ * 从 body 内容中提取有序的元素数组
+ * 遍历 <w:body> 下所有顶层子元素：<w:p>、<w:tbl>、<w:sdt>
+ * 返回 [{ type, text?, style?, leftIndent?, texts? }]
+ */
+function parseBodyElements(xml) {
+  const bodyMatch = xml.match(/<w:body[^>]*>([\s\S]*?)<\/w:body>/);
+  if (!bodyMatch) return [];
+  const bodyContent = bodyMatch[1];
+
+  const elements = [];
+
+  // 用正则匹配所有 w:p / w:tbl / w:sdt 的开闭标签位置
+  const tagRe = /<(\/)?(w:p|w:tbl|w:sdt)([\s>])/g;
+  const positions = [];
+  let m;
+  while ((m = tagRe.exec(bodyContent)) !== null) {
+    positions.push({ index: m.index, isOpen: !m[1], tag: m[2] });
   }
+
+  // 深度追踪，提取顶层元素边界
+  const topLevelEls = [];
+  let depth = 0;
+  let currentStart = -1;
+  let currentTag = '';
+
+  for (const pos of positions) {
+    if (pos.isOpen) {
+      if (depth === 0) {
+        currentStart = pos.index;
+        currentTag = pos.tag;
+      }
+      depth++;
+    } else {
+      depth--;
+      if (depth === 0 && pos.tag === currentTag) {
+        const closeEnd = bodyContent.indexOf('>', pos.index) + 1;
+        topLevelEls.push({ start: currentStart, end: closeEnd, tag: currentTag });
+      }
+    }
+  }
+
+  // 解析每个顶层元素
+  for (const el of topLevelEls) {
+    const elXml = bodyContent.substring(el.start, el.end);
+
+    if (el.tag === 'w:p') {
+      const text = extractParagraphText(elXml);
+      const style = extractParagraphStyle(elXml);
+      const leftIndent = extractParagraphLeftIndent(elXml);
+
+      // 段落含图片标记 → 图片占位符
+      if (/<(?:w:drawing|wp:inline|a:blip)/.test(elXml)) {
+        elements.push({ type: 'img', text, style, leftIndent });
+      } else if (text) {
+        elements.push({ type: 'p', text, style, leftIndent });
+      }
+    } else if (el.tag === 'w:tbl') {
+      const texts = extractTableCellTexts(elXml);
+      elements.push({ type: 'tbl', texts });
+    } else if (el.tag === 'w:sdt') {
+      // <w:sdt> 可能包含表格或普通段落
+      if (/<w:tbl[\s>]/.test(elXml)) {
+        const texts = extractTableCellTexts(elXml);
+        elements.push({ type: 'tbl', texts });
+      } else {
+        const text = extractParagraphText(elXml);
+        if (text) {
+          elements.push({ type: 'p', text, style: '', leftIndent: null });
+        }
+      }
+    }
+  }
+
+  return elements;
 }
 
-function parseParagraphs(xml) {
-  const paragraphs = [];
-  // 匹配所有 w:p 段落
-  const pRegex = /<w:p[ >][\s\S]*?<\/w:p>/g;
-  let match;
-  while ((match = pRegex.exec(xml)) !== null) {
-    const pXml = match[0];
-    
-    // 提取样式名
-    let style = '';
-    const styleMatch = pXml.match(/<w:pStyle[^>]*w:val="([^"]*)"/);
-    if (styleMatch) style = styleMatch[1];
-    
-    // 提取段落文本
-    const texts = [];
-    const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
-    let tMatch;
-    while ((tMatch = tRegex.exec(pXml)) !== null) {
-      texts.push(tMatch[1]);
-    }
-    const text = texts.join('').trim();
-    if (!text) continue;
-    
-    // 提取缩进
-    let leftIndent = null;
-    const indentMatch = pXml.match(/<w:ind[^>]*w:left="(\d+)"/);
-    if (indentMatch) leftIndent = parseInt(indentMatch[1]);
-    
-    paragraphs.push({ text, style, leftIndent });
+/**
+ * 从 XML 片段中提取所有 <w:t> 文本
+ */
+function extractParagraphText(xml) {
+  const texts = [];
+  const tRe = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+  let m;
+  while ((m = tRe.exec(xml)) !== null) {
+    texts.push(m[1]);
   }
-  return paragraphs;
+  return texts.join('').trim();
+}
+
+/**
+ * 从段落 XML 中提取样式名
+ */
+function extractParagraphStyle(pXml) {
+  const m = pXml.match(/<w:pStyle[^>]*w:val="([^"]*)"/);
+  return m ? m[1] : '';
+}
+
+/**
+ * 从段落 XML 中提取左缩进量 (twips)
+ */
+function extractParagraphLeftIndent(pXml) {
+  const m = pXml.match(/<w:ind[^>]*w:left="(\d+)"/);
+  return m ? parseInt(m[1]) : null;
+}
+
+/**
+ * 递归提取表格单元格文本（<w:tc> → <w:p> → <w:t>）
+ */
+function extractTableCellTexts(tblXml) {
+  const texts = [];
+  const tcRe = /<w:tc[ >][\s\S]*?<\/w:tc>/g;
+  let m;
+  while ((m = tcRe.exec(tblXml)) !== null) {
+    const cellText = extractParagraphText(m[0]);
+    if (cellText) texts.push(cellText);
+  }
+  return texts;
+}
+
+/**
+ * 根据前一个章节标题推断表格描述
+ */
+function inferTableDesc(prevTitle) {
+  const t = prevTitle || '';
+  if (/质量标准|监测/.test(t)) return '质量标准及监测频次';
+  if (/批号/.test(t) && /检测结果/.test(t)) return '检验结果对照表';
+  if (/偏差/.test(t)) return '偏差汇总表';
+  if (/变更/.test(t)) return '变更汇总表';
+  if (/统计|TOC/.test(t)) return '数据统计表';
+  if (/汇总/.test(t)) return '汇总表';
+  return '数据表';
+}
+
+/**
+ * 根据前一个章节标题推断图片描述
+ */
+function inferImageDesc(prevTitle) {
+  const t = prevTitle || '';
+  if (/趋势图|趋势分析/.test(t)) return '趋势图';
+  if (/分布图/.test(t)) return '分布图';
+  if (/流程图/.test(t)) return '流程图';
+  if (/工艺/.test(t)) return '工艺流程图';
+  return '图表';
+}
+
+/**
+ * 判断文本是否为数据值（不应归为标题）
+ * "8.75 -9.25"、"7.9 -8.4"、"2026.01"、"≤1.4%"、"N/A"、"100%"、"0%" 等
+ */
+function isDataValue(text) {
+  const t = text.trim();
+  if (/^N\/A$/i.test(t)) return true;
+  if (/^(?:[≤<>≥]?\s*\d+(?:\.\d+)?\s*%)$/.test(t)) return true;
+  if (/^\d+\.\d+\s*[-–]\s*\d+\.\d+$/.test(t)) return true;
+  if (/^\d{4}\.\d{2}$/.test(t)) return true;
+  return false;
 }
 
 function getSectionNum(title) {
@@ -102,58 +186,130 @@ function cleanTitle(title) {
   return title.replace(/^[\d.]+\s*/, '');
 }
 
-function looksLikeImplicitHeading(text, leftIndent, nextParagraphs) {
+/**
+ * 检测隐式标题（无显式编号但有标题特征）
+ */
+function looksLikeImplicitHeading(text, leftIndent, nextElements) {
   if (text.length > 25) return false;
   if (leftIndent === 360045) return false;
   const bodyKw = ['备注', 'USL', 'LSL', '结论', '警戒限度', '行动限度', '小结', '从趋势图', '根据', '基于', '结合', '由于'];
   if (bodyKw.some(kw => text.startsWith(kw))) return false;
-  // 后一段是正文
-  const next = nextParagraphs[0];
+  const next = nextElements.find(el => el.type === 'p');
   return next && next.leftIndent === 360045 && next.text.length > 20;
 }
 
-function extractSections(paragraphs) {
+/**
+ * 从有序 bodyElements 数组中提取章节结构
+ * bodyElements: [{ type:'p'|'tbl'|'img', text?, style?, leftIndent?, texts? }]
+ */
+function extractSections(bodyElements) {
   const sections = [];
   let currentSection = null;
   let parentChapter = null;
   let implicitCounter = 0;
   let insideAttachment = false;
-  
-  for (let i = 0; i < paragraphs.length; i++) {
-    const p = paragraphs[i];
-    const text = p.text;
-    const style = p.style;
-    const leftIndent = p.leftIndent;
-    
+
+  for (let i = 0; i < bodyElements.length; i++) {
+    const el = bodyElements[i];
+
+    // --- 表格处理 ---
+    if (el.type === 'tbl') {
+      let prevTitle = '';
+      if (currentSection) {
+        prevTitle = currentSection.clean_title || currentSection.title || '';
+      }
+      const desc = inferTableDesc(prevTitle);
+      if (currentSection) {
+        currentSection.media_placeholders = currentSection.media_placeholders || [];
+        currentSection.media_placeholders.push({ type: 'table', text: desc });
+      }
+      continue;
+    }
+
+    // --- 图片处理 ---
+    if (el.type === 'img') {
+      let prevTitle = '';
+      if (currentSection) {
+        prevTitle = currentSection.clean_title || currentSection.title || '';
+      }
+      const desc = inferImageDesc(prevTitle);
+      if (currentSection) {
+        currentSection.media_placeholders = currentSection.media_placeholders || [];
+        currentSection.media_placeholders.push({ type: 'image', text: desc });
+      }
+      continue;
+    }
+
+    // --- 段落处理 ---
+    const text = el.text;
+    const style = el.style;
+    const leftIndent = el.leftIndent;
+
     // 跳过目录
     if (style.startsWith('toc')) continue;
     // 跳过短路径
     if (text.includes('//') && text.length < 20) continue;
     // 跳过文档开头公司名
     if (text.includes('有限公司') && sections.length === 0) continue;
-    
-    // 图片标题
-    if ((text.includes('分布图') || text.includes('取样点分布')) && text.length < 30) {
-      if (currentSection) {
-        currentSection.media_placeholders = currentSection.media_placeholders || [];
-        currentSection.media_placeholders.push({ type: 'image', text });
+
+    // 数据值 → 正文，不归为标题
+    if (isDataValue(text)) {
+      if (currentSection && !currentSection.is_attachment) {
+        currentSection.content = currentSection.content || [];
+        currentSection.content.push(text);
       }
       continue;
     }
-    
-    if (insideAttachment && !(style === 'Title' && getSectionNum(text))) continue;
-    
-    // Title / Heading 样式
-    if ((CHAPTER_STYLES.has(style) || style === 'Title')) {
+
+    // 附件内部：仅当再次遇到标题样式段落时才跳出
+    if (insideAttachment && !(HEADING_STYLES.has(style) && getSectionNum(text))) continue;
+
+    // 标题样式段落
+    if (HEADING_STYLES.has(style)) {
       const secNum = getSectionNum(text);
-      if (!secNum) continue;
-      
-      const isAttachment = ATTACHMENT_KEYWORDS.some(kw => text.includes(kw));
-      
+      // 无编号的标题样式段落 → 降级为正文
+      if (!secNum) {
+        if (currentSection && !currentSection.is_attachment) {
+          currentSection.content = currentSection.content || [];
+          currentSection.content.push(text);
+        }
+        continue;
+      }
+
+      // 清理尾部页码（TOC 中可能黏在标题后的数字）
+      const cleanText = text.replace(/\s*\d+$/, '').trim();
+      const cleanName = cleanTitle(cleanText);
+      const isAttachment = ATTACHMENT_KEYWORDS.some(kw => cleanText.includes(kw));
+
+      // 仅 Title / Heading1 + 编号不含小数点 → chapter
+      if (CHAPTER_STYLES.has(style) && !secNum.includes('.')) {
+        // 去重：若已存在同编号 chapter，复用而非重复创建
+        const existing = sections.find(s => s.type === 'chapter' && s.sec_num === secNum);
+        if (existing) {
+          currentSection = existing;
+          parentChapter = existing;
+          implicitCounter = 0;
+          insideAttachment = existing.is_attachment || false;
+          continue;
+        }
+        sections.push({
+          type: 'chapter', title: cleanText, sec_num: secNum,
+          clean_title: cleanName,
+          content: [], media_placeholders: [],
+          is_attachment: isAttachment
+        });
+        currentSection = sections[sections.length - 1];
+        parentChapter = currentSection;
+        implicitCounter = 0;
+        insideAttachment = isAttachment;
+        continue;
+      }
+
+      // 编号含小数点 → sub
       if (secNum.includes('.')) {
         sections.push({
-          type: 'sub', title: text, sec_num: secNum,
-          clean_title: cleanTitle(text),
+          type: 'sub', title: cleanText, sec_num: secNum,
+          clean_title: cleanName,
           content: [], media_placeholders: [],
           is_attachment: isAttachment
         });
@@ -161,21 +317,12 @@ function extractSections(paragraphs) {
         if (isAttachment) insideAttachment = true;
         continue;
       }
-      
-      sections.push({
-        type: 'chapter', title: text, sec_num: secNum,
-        clean_title: cleanTitle(text),
-        content: [], media_placeholders: [],
-        is_attachment: isAttachment
-      });
-      currentSection = sections[sections.length - 1];
-      parentChapter = currentSection;
-      implicitCounter = 0;
-      insideAttachment = isAttachment;
+
+      // Heading2 等非 Title/Heading1 样式 + 无小数点 → 跳过
       continue;
     }
-    
-    // 显式编号的 Normal 段落
+
+    // Normal 样式：显式编号 → sub（Normal 永远不会是 chapter）
     const secNum = getSectionNum(text);
     if (secNum && secNum.includes('.')) {
       sections.push({
@@ -186,9 +333,9 @@ function extractSections(paragraphs) {
       currentSection = sections[sections.length - 1];
       continue;
     }
-    
-    // 隐式标题检测
-    if (looksLikeImplicitHeading(text, leftIndent, paragraphs.slice(i + 1, i + 5))) {
+
+    // Normal 样式：隐式标题检测
+    if (looksLikeImplicitHeading(text, leftIndent, bodyElements.slice(i + 1, i + 10))) {
       if (parentChapter) {
         implicitCounter++;
         const implNum = parentChapter.sec_num + '.' + implicitCounter;
@@ -202,85 +349,159 @@ function extractSections(paragraphs) {
         continue;
       }
     }
-    
+
     // 正文
     if (currentSection && !currentSection.is_attachment) {
       currentSection.content = currentSection.content || [];
       currentSection.content.push(text);
     }
   }
-  
+
   return sections;
 }
 
+/**
+ * 格式化输出：三部分 —— [TOC 目录] / [完整子标题结构] / [大纲 + 文字段落]
+ */
 function formatOutput(inputPath, sections) {
   const docTitle = path.basename(inputPath, '.docx');
+
   const lines = [];
   lines.push('='.repeat(60));
   lines.push(docTitle);
   lines.push('='.repeat(60));
   lines.push('');
-  
+
   // [TOC 目录]
   lines.push('[TOC 目录]');
   lines.push('-'.repeat(40));
-  for (const sec of sections) {
-    if (sec.type === 'chapter') {
-      lines.push(sec.sec_num + ' ' + sec.clean_title);
-    }
+  const chapters = sections.filter(s => s.type === 'chapter');
+  const subs = sections.filter(s => s.type === 'sub');
+
+  for (const ch of chapters) {
+    lines.push(ch.sec_num + ' ' + ch.clean_title);
   }
   lines.push('');
-  
-  // [完整子标题结构]
+
+  // [完整子标题结构] — 按章节分组，子标题嵌套在所属一级标题下
   lines.push('[完整子标题结构]');
   lines.push('-'.repeat(40));
-  for (const sec of sections) {
-    const depth = sec.sec_num.split('.').length - 1;
-    const prefix = '  '.repeat(depth);
-    lines.push(prefix + sec.sec_num + ' ' + sec.clean_title);
+  for (const ch of chapters) {
+    lines.push(ch.sec_num + ' ' + ch.clean_title);
+    const chSubs = subs.filter(s => s.sec_num.startsWith(ch.sec_num + '.'));
+    chSubs.sort((a, b) => a.sec_num.localeCompare(b.sec_num, undefined, { numeric: true }));
+    for (const sub of chSubs) {
+      const depth = sub.sec_num.split('.').length - 1;
+      const prefix = '  '.repeat(depth);
+      lines.push(prefix + sub.sec_num + ' ' + sub.clean_title);
+    }
   }
   lines.push('');
-  
-  // [大纲 + 文字段落]
+
+  // [大纲 + 文字段落] — 按章节分组，子标题和正文嵌套在所属章节下
   lines.push('[大纲 + 文字段落]');
   lines.push('-'.repeat(40));
-  for (const sec of sections) {
-    if (sec.type === 'chapter') {
-      lines.push('--- Ch' + sec.sec_num + ' ---');
-    }
-    
-    if (sec.is_attachment) {
-      lines.push(sec.sec_num + ' ' + sec.clean_title);
-      if (sec.media_placeholders && sec.media_placeholders.length > 0) {
-        for (const mp of sec.media_placeholders) {
+  for (const ch of chapters) {
+    lines.push('--- Ch' + ch.sec_num + ' ---');
+    lines.push(ch.sec_num + ' ' + ch.clean_title);
+
+    // 输出该章的媒体占位符（表格/图片）
+    if (ch.media_placeholders && ch.media_placeholders.length > 0) {
+      for (const mp of ch.media_placeholders) {
+        if (mp.type === 'image') {
           lines.push('[图片：' + mp.text + ']');
+        } else if (mp.type === 'table') {
+          lines.push('[表格：' + mp.text + ']');
         }
       }
-      if (!sec.media_placeholders || sec.media_placeholders.length === 0) {
+    }
+
+    if (ch.is_attachment) {
+      if (!ch.media_placeholders || ch.media_placeholders.length === 0) {
         lines.push(INDENT + '[以下为附件数据表格，不含文字段落]');
       }
       lines.push('');
       continue;
     }
-    
-    lines.push(sec.sec_num + ' ' + sec.clean_title);
-    
-    if (sec.media_placeholders) {
-      for (const mp of sec.media_placeholders) {
-        lines.push('[图片：' + mp.text + ']');
+
+    // 输出该章的子标题及其内容
+    const chSubs = subs.filter(s => s.sec_num.startsWith(ch.sec_num + '.'));
+    chSubs.sort((a, b) => a.sec_num.localeCompare(b.sec_num, undefined, { numeric: true }));
+    for (const sub of chSubs) {
+      lines.push(sub.sec_num + ' ' + sub.clean_title);
+      if (sub.media_placeholders) {
+        for (const mp of sub.media_placeholders) {
+          if (mp.type === 'image') {
+            lines.push('[图片：' + mp.text + ']');
+          } else if (mp.type === 'table') {
+            lines.push('[表格：' + mp.text + ']');
+          }
+        }
+      }
+      if (sub.content) {
+        for (const ctext of sub.content) {
+          lines.push(INDENT + ctext);
+        }
       }
     }
-    
-    if (sec.content) {
-      for (const ctext of sec.content) {
+
+    // 输出该章自身的正文（不归属任何子标题的段落）
+    if (ch.content) {
+      for (const ctext of ch.content) {
         lines.push(INDENT + ctext);
       }
     }
-    
+
     lines.push('');
   }
-  
+
   return lines.join('\n');
+}
+
+function extractOutline(inputPath, outputPath) {
+  const tempDir = path.join(os.tmpdir(), 'qrs_extract_' + Date.now());
+
+  try {
+    // Step 1: 解压 docx（PowerShell Expand-Archive 不支持 .docx 扩展名，需先拷贝为 .zip）
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempZip = path.join(tempDir, 'temp.zip');
+    fs.copyFileSync(inputPath, tempZip);
+    execSync(`powershell -Command "Expand-Archive -Path '${tempZip}' -DestinationPath '${tempDir}' -Force"`, { stdio: 'pipe' });
+    fs.unlinkSync(tempZip);
+
+    const docXmlPath = path.join(tempDir, 'word', 'document.xml');
+    if (!fs.existsSync(docXmlPath)) throw new Error('document.xml not found in docx');
+
+    const xmlContent = fs.readFileSync(docXmlPath, 'utf-8');
+
+    // Step 2: 双遍解析 body 元素（<w:p> + <w:tbl> + <w:sdt>）
+    const bodyElements = parseBodyElements(xmlContent);
+
+    // Step 3: 提取章节
+    const sections = extractSections(bodyElements);
+
+    // Step 4: 格式化输出
+    const output = formatOutput(inputPath, sections);
+    const outDir = path.dirname(path.resolve(outputPath));
+    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(outputPath, output, 'utf-8');
+
+    // Step 5: 打印摘要
+    const chapterCount = sections.filter(s => s.type === 'chapter').length;
+    console.log(`总章节数: ${chapterCount}`);
+    sections.forEach(s => {
+      const labels = [];
+      if (s.is_implicit) labels.push('[隐式]');
+      if (s.is_attachment) labels.push('[附件]');
+      console.log(`  ${s.type} ${s.sec_num.padEnd(8)} ${labels.join(' ')} ${s.clean_title}`);
+    });
+
+    return { success: true, chapterCount };
+
+  } finally {
+    // 清理临时目录
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
 }
 
 module.exports = { extractOutline };
@@ -291,23 +512,23 @@ if (require.main === module) {
   const getArg = (n) => { const i = args.indexOf(n); return i !== -1 && i + 1 < args.length ? args[i + 1] : undefined; };
   const input = getArg('--input');
   const output = getArg('--output');
-  
+
   if (!input || !output) {
     console.error('用法: node extract-outline.js --input <docx> --output <txt>');
     process.exit(1);
   }
-  
+
   if (!fs.existsSync(input)) {
     console.error('文件不存在: ' + input);
     process.exit(1);
   }
-  
+
   const ext = path.extname(input).toLowerCase();
   if (ext !== '.docx') {
     console.error('仅支持 .docx 格式');
     process.exit(1);
   }
-  
+
   try {
     const result = extractOutline(input, output);
     console.log('\n输出: ' + output);

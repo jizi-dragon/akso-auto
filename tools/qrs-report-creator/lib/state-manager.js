@@ -28,8 +28,19 @@ function createState(outlinePath, meta = {}) {
     extractedAt: new Date().toISOString(),
     approved: false,
     approvedAt: null,
-    chapterCount: meta.chapterCount || 0
+    chapterCount: meta.chapterCount || 0,
+    reviewed: meta.reviewed || false,
+    reviewIssues: meta.reviewIssues || 0
   };
+  fs.writeFileSync(statePath(outlinePath), JSON.stringify(state, null, 2), 'utf-8');
+  return state;
+}
+
+function markReviewed(outlinePath, issuesCount) {
+  const state = readState(outlinePath);
+  if (!state) return null;
+  state.reviewed = true;
+  state.reviewIssues = issuesCount || 0;
   fs.writeFileSync(statePath(outlinePath), JSON.stringify(state, null, 2), 'utf-8');
   return state;
 }
@@ -76,5 +87,5 @@ function requireApproval(outlinePath, toolName) {
 }
 
 module.exports = {
-  readState, createState, approve, isApproved, resetApproval, requireApproval
+  readState, createState, approve, isApproved, resetApproval, requireApproval, markReviewed
 };

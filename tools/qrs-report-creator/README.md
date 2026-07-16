@@ -2,13 +2,18 @@
 
 ## 概述
 
-从 `.docx` 年度产品质量回顾报告模板出发，通过**强制两步审批流程**完成自动化配置：
+从 `.docx` 年度产品质量回顾报告模板出发，通过**三阶段工作流**完成自动化配置：
 
 ```
-Step 1: extract  → 提取大纲 → 用户审查 → approve 审批通过
+Step 1: extract  → 提取大纲（含自动审查） → 用户审查 → approve 审批通过
 Step 2: create   → 批量创建章节
 Step 3: design   → 逐章写入 ONLYOFFICE 编辑器
 ```
+
+`extract` 阶段内置 **AI 二次审查**，自动检测三类常见问题：
+- 误将表格数据 / 次级标题归入一级标题
+- 表格文本泄露到正文
+- 标题与正文粘连未分行
 
 > ⚠️ **仅支持 `.docx` 格式。** 其他格式（.md / .doc / .pdf / .txt）请先用 Word 另存为 `.docx`。
 
@@ -55,7 +60,7 @@ extract (提取大纲)
 | `--username` | 用户名 | 环境变量 `AKSO_USERNAME` |
 | `--password` | 密码 | 环境变量 `AKSO_PASSWORD` |
 | `--input` | .docx 模板路径（extract） | — |
-| `--output` | 大纲输出路径（extract） | — |
+| `--output` | 大纲输出路径（extract，可选，默认 `大纲_<文档名>.txt`） | — |
 | `--outline` | 大纲文件路径（approve/status/create/design） | — |
 | `--reportUrl` | 报告模板编辑页 URL（create/design） | — |
 | `--chapters` | 要设计的章节编号，逗号分隔 | 全部 |
@@ -65,7 +70,8 @@ extract (提取大纲)
 
 | 命令 | 功能 | 需浏览器 |
 |------|------|:------:|
-| `extract` | 从 .docx 提取文档大纲 | — |
+| `extract` | 从 .docx 提取文档大纲（含自动审查） | — |
+| `review` | 审查大纲结构质量（独立运行） | — |
 | `approve` | 标记大纲已审批 | — |
 | `status` | 查看当前审批状态 | — |
 | `create` | 批量创建章节目录 | ✅ |
@@ -118,9 +124,11 @@ tools/qrs-report-creator/
 ├── index.js                     # 主入口（CLI 命令分发）
 ├── README.md                    # 本文件
 └── lib/
-    ├── extract-outline.py       # Python 文档大纲提取脚本
+    ├── extract-outline.py       # Python 文档大纲提取脚本（备用）
+    ├── extract-outline.js       # Node.js 文档大纲提取器（首选，含表格/图片检测）
     ├── chapter-automation.js    # 浏览器自动化模块（登录 / 创建 / 设计）
-    └── state-manager.js         # 审批状态管理（.qrs-state.json）
+    ├── state-manager.js         # 审批状态管理（.qrs-state.json）
+    └── review-outline.js        # AI 二次审查模块（结构质量检测）
 ```
 
 ## 注意事项
@@ -130,6 +138,7 @@ tools/qrs-report-creator/
 - 大纲生成后**必须审查并执行 approve**，否则 create/design 将拒绝执行
 - 重新执行 extract 会重置审批状态，需重新 approve
 - 附件章节（含"附件""附表"关键词）会自动跳过内容写入
+- extract 后可对大纲文件执行质量审查：`node tools/qrs-report-creator/lib/review-outline.js --input 完整大纲.txt`，使用 `--fix` 自动修复部分问题
 
 ## 完整大纲.txt 格式说明
 
