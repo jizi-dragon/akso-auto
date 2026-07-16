@@ -2,19 +2,23 @@
 
 ## 一、目录隔离原则
 
-- `tools/<tool-name>/` — 每个工具独立子目录，各自含 `index.js`（入口）+ `README.md`（AI 使用说明）
+- `tools/<tool-name>/` — 每个工具独立子目录，工具之间互不依赖、互不干扰，各自含 `index.js`（入口）+ `README.md`（AI 使用说明）+ `lib/`（内部模块目录）
 - `output/` — 工具运行时产物（不入 Git，见 `.gitignore`）
 - `.trae/skills/` — TRAE Skill 定义，仅 AI Agent 读取
 - `.trae/skills/akso-gmp/playbooks/` — **仅放模板级文件**（如 `blueprint-template.md`），不放实际配置蓝图
 - `.trae/documents/` — 计划文档归档
 - `output/blueprints/` — **实际配置蓝图归档**（如 `dinner-tonight-blueprint.md`），不受 Skill 目录污染
+- `test-fixtures/` — 测试用例存放目录（.docx 模板文件等）
 - `external_reference_resources/` — 外部参考文档（API 文档、配置示例等）
 
 ## 二、工具开发规范
 
-- 每个工具一个子目录，入口文件为 `index.js`
+- 工具之间相互独立，互不干扰，禁止跨工具引用内部实现（共享代码抽到 `shared/` 目录）
+- 每个工具**必须**包含以下三项内容（强制）：
+  - `index.js` — 主入口（主程序），支持命令行参数
+  - `README.md` — 工具介绍及 AI Agent 使用说明
+  - `lib/` — 工具内部模块目录（存放模块文件、JSON 数据文件等）
 - 新工具 npm 依赖统一在顶层 `package.json` 管理
-- 工具间不得相互引用内部实现，共享代码抽到 `shared/` 目录
 - 工具要支持通过命令行参数 + 环境变量传入所有配置项
 
 ## 三、安全红线
@@ -95,9 +99,9 @@ playbooks/（复用层）
 
 ```
 tools/<tool-name>/
-├── index.js       # 主入口，支持命令行参数
-├── README.md      # AI Agent 使用说明
-└── lib/           # 工具内部模块（可选）
+├── index.js       # 主入口（主程序），支持命令行参数（强制）
+├── README.md      # 工具介绍及 AI Agent 使用说明（强制）
+└── lib/           # 内部模块目录，存放模块文件、JSON 数据文件等（强制）
 ```
 
 ## 八、Playwright 浏览器生命周期管理
