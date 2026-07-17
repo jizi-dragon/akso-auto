@@ -17,12 +17,26 @@ Step 3: design   → 逐章写入 ONLYOFFICE 编辑器
 
 > ⚠️ **仅支持 `.docx` 格式。** 其他格式（.md / .doc / .pdf / .txt）请先用 Word 另存为 `.docx`。
 
+## 浏览器持久化（CDP 复用）
+
+`create` 和 `design` 阶段需要浏览器操作。为避免反复启动/关闭浏览器：
+
+- **首次** `create` / `design`：启动 Playwright 浏览器（暴露 CDP 端口 9222），登录后执行操作，结束时**不关闭浏览器**，只断开 CDP 连接。CDP 信息记录到 `output/qrs/.qrs-browser.json`
+- **后续** `create` / `design`：读取 `.qrs-browser.json`，通过 `connectOverCDP` 直连已有浏览器实例，无需重新登录
+- **全部完成后**：执行 `close` 命令关闭浏览器并清理状态文件
+
+```
+首次 → launchBrowser(cdpPort:9222) → login → doWork → disconnect (浏览器保持)
+后续 → connectOverCDP → doWork → disconnect (浏览器保持)
+结束 → close 命令 → closeRemoteBrowser → 清理 .qrs-browser.json
+```
+
 ## 相关目录
 
 | 目录 | 用途 |
 |------|------|
 | `test-fixtures/` | 存放测试用例（.docx 文件） |
-| `output/qrs/` | QRS 工具运行时产物（大纲文件、状态文件等） |
+| `output/qrs/` | QRS 工具运行时产物（大纲文件、状态文件、CDP 状态等） |
 
 ## 依赖
 
@@ -30,8 +44,8 @@ Step 3: design   → 逐章写入 ONLYOFFICE 编辑器
 |------|------|----------|
 | Node.js | 主程序运行时 | — |
 | Playwright | 浏览器自动化 | `npm install`（项目根已安装） |
-| Python 3 | 文档大纲提取 | — |
-| python-docx | .docx 解析 | `pip install python-docx` |
+| Python 3 | 文档大纲提取（备用） | — |
+| python-docx | .docx 解析（备用） | `pip install python-docx` |
 
 ## 两步审批流程
 
@@ -50,6 +64,7 @@ extract (提取大纲)
         │
         ▼
   create / design (写入系统)
+  └─ 全部完成后 → close (关闭浏览器)
 ```
 
 ## 命令行参数速查
@@ -76,6 +91,7 @@ extract (提取大纲)
 | `status` | 查看当前审批状态 | — |
 | `create` | 批量创建章节目录 | ✅ |
 | `design` | 逐章设计内容（写入 ONLYOFFICE） | ✅ |
+| `close` | 关闭持久化浏览器，清理 CDP 状态 | ✅ |
 
 ## 使用示例
 
@@ -100,12 +116,12 @@ node tools/qrs-report-creator/index.js status --outline "完整大纲.txt"
 # Step 2: 用户审查大纲文件后，标记审批通过
 node tools/qrs-report-creator/index.js approve --outline "完整大纲.txt"
 
-# Step 3: 批量创建章节
+# Step 3: 批量创建章节（首次启动浏览器，记录 CDP）
 node tools/qrs-report-creator/index.js create \
   --outline "完整大纲.txt" \
   --reportUrl "https://xxx.aksoegmp.com/web/report2/..."
 
-# Step 4: 逐章设计内容
+# Step 4: 逐章设计内容（CDP 复用同一浏览器）
 node tools/qrs-report-creator/index.js design \
   --outline "完整大纲.txt" \
   --reportUrl "https://xxx.aksoegmp.com/web/report2/..."
@@ -115,6 +131,9 @@ node tools/qrs-report-creator/index.js design \
   --outline "完整大纲.txt" \
   --chapters 1,2,3 \
   --reportUrl "https://xxx.aksoegmp.com/web/report2/..."
+
+# Step 5: 全部完成后关闭浏览器
+node tools/qrs-report-creator/index.js close
 ```
 
 ## 文件结构
@@ -139,6 +158,7 @@ tools/qrs-report-creator/
 - 重新执行 extract 会重置审批状态，需重新 approve
 - 附件章节（含"附件""附表"关键词）会自动跳过内容写入
 - extract 后可对大纲文件执行质量审查：`node tools/qrs-report-creator/lib/review-outline.js --input 完整大纲.txt`，使用 `--fix` 自动修复部分问题
+- **浏览器持久化**：首次 create/design 启动浏览器后，后续操作复用同一实例。全部完成后务必执行 `close` 清理浏览器和状态文件
 
 ## 完整大纲.txt 格式说明
 
@@ -149,10 +169,10 @@ tools/qrs-report-creator/
 | `====` / `----` | 板块分隔线，仅用于可读性 | ❌ |
 | `[TOC 目录]` | 一级章节目录板块标题 | ❌ |
 | `[完整子标题结构]` | 完整子标题层级板块标题 | ❌ |
-| `[大纲 + 文字段落]` | 正文内容板块标题（设计阶段以此为数据源） | ❌ |
+| `[大纲 + 文字段落]` | 正文内容板块标题（design 阶段以此为数据源） | ❌ |
 | `--- ChN ---` | 第 N 章分隔标记，用于快速定位 | ❌ |
 | `N 标题名`（如 `1 概述`） | 一级章节名称 + 章节标题（TOC 区用于创建，正文区写入设计） | ✅ |
 | `N.N 标题名`（如 `2.1 产品情况`） | 子标题（仅存在于正文区，写入设计） | ✅ |
 | `　　正文...`（两全角空格缩进） | 正文段落（仅存在于正文区，写入设计） | ✅ |
 
-> **关键约定**：`--- ChN ---` 是机器可读的章节分隔符，工具会自动过滤不会写入系统设计。`design` 阶段写入的内容 = 该章节 `--- ChN ---` 到下一个 `--- Ch(N+1) ---` 之间的所有行（排除纯分隔线）。
+> **关键约定**：`--- ChN ---` 是机器可读的章节分隔符，工具会自动过滤不会写入系统设计。`design` 阶段写入的内容 = 该章节 `--- ChN ---` 到下一个 `--- Ch(N+1) ---` 之间的所有行（排除纯分隔线和板块标题）。

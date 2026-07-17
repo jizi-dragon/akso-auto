@@ -110,21 +110,34 @@ async function createChapters(page, chapters) {
  * @param {string[]} lines - 要在 Canvas 中逐行输入的文本
  */
 async function designChapter(page, nthIndex, lines) {
-  // 对 Ant Design 虚拟滚动表，章节 15+ 需要先滚动加载
-  if (nthIndex >= 14) {
-    try {
-      await page.locator('.scroll-wrapper').first().hover();
-      await page.mouse.wheel(0, 5000);
+  // 定位到目标页码（每页 10 条）
+  const targetPage = Math.floor(nthIndex / 10) + 1;
+  const localIndex = nthIndex % 10;
+
+  // 先回第一页，再跳到目标页（确保跨页跳转可靠）
+  if (targetPage > 1) {
+    const page1 = page.locator('.ant-pagination-item-1');
+    if (await page1.count() > 0) {
+      await page1.click();
       await page.waitForTimeout(1000);
-    } catch (e) {
-      // 非虚拟滚动表格时忽略
+    }
+    const pageBtn = page.locator(`.ant-pagination-item-${targetPage}`);
+    if (await pageBtn.count() > 0) {
+      await pageBtn.click();
+      await page.waitForTimeout(1500);
+    }
+  } else {
+    // 已在第 1 页或需要回第 1 页
+    const page1 = page.locator('.ant-pagination-item-1');
+    if (await page1.count() > 0) {
+      await page1.click();
+      await page.waitForTimeout(1000);
     }
   }
 
-  // 点击第 nth 个「设计」按钮
   const designBtns = page.getByRole('button', { name: '设计' });
-  await designBtns.nth(nthIndex).click();
-  await page.waitForTimeout(5000);
+  await designBtns.nth(localIndex).click();
+  await page.waitForTimeout(10000);
 
   // 在所有 iframe 中定位最大的 Canvas
   let canvasBox = null;
