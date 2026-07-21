@@ -7,10 +7,8 @@
  *   3. create  — 在系统中批量创建章节目录（须已审批）
  *   4. design  — 逐章在 ONLYOFFICE 编辑器中写入内容（须已审批）
  *
- * 浏览器持久化：
- *   首次 create/design 时启动浏览器并记录 CDP 端口到 .qrs-browser.json，
- *   后续 create/design 通过 CDP 复用同一浏览器实例，不再反复启动/关闭。
- *   全部完成后执行 close 子命令清理浏览器。
+ * 浏览器生命周期：
+ *   每次 create/design 启动新浏览器，任务完成后等待 30s 自动关闭。
  *
  * 用法：
  *   node tools/qrs-report-creator/index.js extract --input template.docx --output 大纲.txt
@@ -18,21 +16,29 @@
  *   node tools/qrs-report-creator/index.js status  --outline 大纲.txt
  *   node tools/qrs-report-creator/index.js create  --outline 大纲.txt --reportUrl <URL>
  *   node tools/qrs-report-creator/index.js design  --outline 大纲.txt --chapters 1,2,3 --reportUrl <URL>
- *   node tools/qrs-report-creator/index.js close
  */
 
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { chromium } = require('playwright');
 const {
-  launchChromeDetached, login, connectBrowser,
-  disconnectBrowser, closeRemoteBrowser, dismissAllPopups,
-  saveBrowserState, readBrowserState, deleteBrowserState, DEFAULT_CDP_PORT
+  login, closeBrowser, dismissAllPopups
 } = require('../../shared/browser-manager');
 const { parseOutline, createChapters, designChapter } = require('./lib/chapter-automation');
 const { createState, approve, readState, requireApproval, markReviewed } = require('./lib/state-manager');
 const { extractOutline } = require('./lib/extract-outline');
 const { reviewQuality, formatReviewReport } = require('./lib/review-outline');
+
+const QRS_DIR = path.join(__dirname, '..', '..', 'output', 'qrs');
+const TXT_DIR = path.join(QRS_DIR, 'txt');
+const PLAN_DIR = path.join(QRS_DIR, 'plan');
+const TEMP_DIR = path.join(QRS_DIR, 'temp');
+
+// 确保子目录存在
+fs.mkdirSync(TXT_DIR, { recursive: true });
+fs.mkdirSync(PLAN_DIR, { recursive: true });
+fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const EXTRACT_SCRIPT = path.join(__dirname, 'lib', 'extract-outline.py');
 
@@ -70,7 +76,7 @@ async function doExtract(config) {
 
   if (!config.output) {
     const base = path.basename(config.input, '.docx');
-    config.output = path.join(path.dirname(config.input), '大纲_' + base + '.txt');
+    config.output = path.join(TXT_DIR, '大纲_' + base + '.txt');
   }
 
   console.log(`[提取] 输入: ${config.input}`);
@@ -162,77 +168,65 @@ async function doDesign(config, page) {
     targetChapters = chapters;
   }
 
-  console.log(`[设计] 待设计 ${targetChapters.length} 章`);
+  // 读取或创建 checklist
+  const { createChecklist, markChapterDone, readChecklist } = require('./lib/checklist-manager');
+  let doneChapters = readChecklist(outlinePath);
+  if (doneChapters === null) {
+    // 首次设计，创建 checklist
+    createChecklist(outlinePath, targetChapters.map(c => ({ num: c.num, title: c.title })));
+    doneChapters = [];
+  }
 
-  for (let i = 0; i < targetChapters.length; i++) {
-    const ch = targetChapters[i];
+  // 过滤掉已完成的章节
+  const pendingChapters = targetChapters.filter(c => !doneChapters.includes(String(c.num)));
+  if (pendingChapters.length === 0) {
+    console.log('[设计] 所有章节已完成');
+    return;
+  }
+
+  console.log(`[设计] 待设计 ${pendingChapters.length} 章（已跳过 ${targetChapters.length - pendingChapters.length} 已完成）`);
+
+  let completed = 0;
+  let failed = 0;
+  for (let i = 0; i < pendingChapters.length; i++) {
+    const ch = pendingChapters[i];
     const nthIndex = Number(ch.num) - 1;
-    console.log(`\n[设计] Ch${ch.num} "${ch.title}" (${i + 1}/${targetChapters.length})`);
+    console.log(`\n[设计] Ch${ch.num} "${ch.title}" (${completed + failed + 1}/${pendingChapters.length})`);
     try {
       await designChapter(page, nthIndex, ch.lines);
       console.log(`  ✅ Ch${ch.num} 完成`);
+      markChapterDone(outlinePath, ch.num);
+      completed++;
     } catch (e) {
       console.error(`  ❌ Ch${ch.num} 失败: ${e.message}`);
+      failed++;
     }
   }
-  console.log(`\n[设计] 完成`);
+  console.log(`\n[设计] 完成 — 成功 ${completed}，失败 ${failed}`);
 }
 
-async function ensureBrowserAndPage(config, needsLogin) {
-  const existingState = readBrowserState();
+async function launchAndLogin(config) {
+  const browser = await chromium.launch({ headless: false });
+  const page = await browser.newPage();
 
-  if (existingState) {
-    try {
-      const cdpUrl = `http://127.0.0.1:${existingState.cdpPort}`;
-      console.log(`[CDP] 连接到已有浏览器 ${cdpUrl} ...`);
-      const { browser } = await connectBrowser(cdpUrl);
-      const page = browser.contexts()[0].pages()[0];
-      await dismissAllPopups(page);
-
-      if (needsLogin) {
-        await page.goto(config.reportUrl, { waitUntil: 'networkidle', timeout: 15000 });
-        await page.waitForTimeout(2000);
-      }
-
-      console.log(`[CDP] 连接成功，浏览器 PID: ${existingState.pid || '(未知)'}`);
-      return { browser, page, isNew: false };
-    } catch (e) {
-      console.log(`[CDP] 连接失败（${e.message}），启动新浏览器...`);
-      deleteBrowserState();
-    }
+  console.log(`[登录] ${config.baseUrl}`);
+  const loginResult = await login(page, {
+    baseUrl: config.baseUrl,
+    username: config.username,
+    password: config.password
+  });
+  if (!loginResult.success) {
+    console.error('[登录] 失败，请检查凭证');
+    await browser.close();
+    process.exit(1);
   }
+  console.log('[登录] 成功');
 
-  const cdpPort = DEFAULT_CDP_PORT;
-  console.log(`[启动] 独立启动 Chrome（CDP 端口: ${cdpPort}）...`);
-  const { pid, cdpPort: actualPort } = await launchChromeDetached(cdpPort);
-  console.log(`[启动] Chrome 已就绪，PID: ${pid}`);
+  await page.goto(config.reportUrl, { waitUntil: 'networkidle', timeout: 15000 });
+  await page.waitForTimeout(2000);
+  await dismissAllPopups(page);
 
-  const cdpUrl = `http://127.0.0.1:${actualPort}`;
-  const { browser } = await connectBrowser(cdpUrl);
-  const page = browser.contexts()[0].pages()[0];
-
-  if (needsLogin) {
-    console.log(`[登录] ${config.baseUrl}`);
-    const loginResult = await login(page, {
-      baseUrl: config.baseUrl,
-      username: config.username,
-      password: config.password
-    });
-    if (!loginResult.success) {
-      console.error('[登录] 失败，请检查凭证');
-      await disconnectBrowser(browser);
-      process.exit(1);
-    }
-    console.log('[登录] 成功');
-
-    await page.goto(config.reportUrl, { waitUntil: 'networkidle', timeout: 15000 });
-    await page.waitForTimeout(2000);
-  }
-
-  saveBrowserState(actualPort);
-  console.log(`[CDP] 浏览器状态已保存（PID: ${pid}，端口: ${actualPort}）`);
-
-  return { browser, page, isNew: true };
+  return { browser, page };
 }
 
 function printUsage() {
@@ -245,7 +239,6 @@ QRS 回顾报告创建工具 — 两步审批流程
   3. approve  审查大纲后标记审批通过
   4. create   在系统中批量创建章节（须已审批）
   5. design   逐章设计内容，写入 ONLYOFFICE 编辑器（须已审批）
-  6. close    关闭持久化浏览器，清理 CDP 状态
 
 命令:
   extract   从 .docx 提取文档大纲（含自动审查）
@@ -254,7 +247,6 @@ QRS 回顾报告创建工具 — 两步审批流程
   status    查看当前审批状态
   create    在系统中批量创建章节目录
   design    逐章设计内容
-  close     关闭持久化浏览器（清理 .qrs-browser.json）
 
 通用参数:
   --baseUrl   系统地址（默认 AKSO_BASE_URL 或 https://standard-val.aksoegmp.com）
@@ -287,7 +279,6 @@ design 参数:
   node tools/qrs-report-creator/index.js status  --outline 大纲.txt
   node tools/qrs-report-creator/index.js create  --outline 大纲.txt --reportUrl https://xxx.aksoegmp.com/web/...
   node tools/qrs-report-creator/index.js design  --outline 大纲.txt --chapters 1,2,3 --reportUrl https://xxx.aksoegmp.com/web/...
-  node tools/qrs-report-creator/index.js close
 `);
 }
 
@@ -358,29 +349,8 @@ async function main() {
     return;
   }
 
-  // ---- 浏览器维护命令 ----
-  if (cmd === 'close') {
-    const existingState = readBrowserState();
-    if (!existingState) {
-      console.log('没有运行中的浏览器状态文件，无需关闭。');
-      process.exit(0);
-    }
-    try {
-      console.log(`[CDP] 连接到 ${existingState.cdpUrl} 并关闭浏览器...`);
-      const { browser } = await connectBrowser(existingState.cdpUrl);
-      await closeRemoteBrowser(browser);
-      deleteBrowserState();
-      console.log('[关闭] 浏览器已关闭，状态文件已清理');
-    } catch (e) {
-      console.log(`[关闭] 连接失败（${e.message}），清理状态文件...`);
-      deleteBrowserState();
-    }
-    return;
-  }
-
   // ---- 需要浏览器的业务命令 ----
-  const needsBrowser = ['create', 'design'].includes(cmd);
-  if (!needsBrowser) {
+  if (!['create', 'design'].includes(cmd)) {
     console.error(`未知命令: ${cmd}`);
     printUsage();
     process.exit(1);
@@ -388,14 +358,12 @@ async function main() {
 
   if (!config.reportUrl) { console.error('缺少 --reportUrl'); process.exit(1); }
 
-  if (cmd === 'create' || cmd === 'design') {
-    if (!config.username || !config.password) {
-      console.error('请通过 --username/--password 或环境变量 AKSO_USERNAME/AKSO_PASSWORD 提供登录凭证');
-      process.exit(1);
-    }
+  if (!config.username || !config.password) {
+    console.error('请通过 --username/--password 或环境变量 AKSO_USERNAME/AKSO_PASSWORD 提供登录凭证');
+    process.exit(1);
   }
 
-  const { browser, page } = await ensureBrowserAndPage(config, true);
+  const { browser, page } = await launchAndLogin(config);
 
   try {
     if (cmd === 'create') {
@@ -403,12 +371,13 @@ async function main() {
     } else if (cmd === 'design') {
       await doDesign(config, page);
     }
+    console.log('\n任务完成，浏览器将在 30s 后自动关闭...');
+    await page.waitForTimeout(30000);
   } catch (e) {
     console.error(`\n[错误] ${e.message}`);
     process.exit(1);
   } finally {
-    await disconnectBrowser(browser);
-    console.log('[CDP] 已断开（浏览器保持运行，完成所有章节后执行 close 关闭）');
+    await closeBrowser(browser);
   }
 }
 

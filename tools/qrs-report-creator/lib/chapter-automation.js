@@ -36,7 +36,7 @@ function parseOutline(outlinePath) {
   }
 
   // 解析正文：过滤分隔符（--- ChN --- / ====== / ------ / [板块标题]）
-  const isSeparator = (s) => /^---\s*Ch\d+\s*---/.test(s) || /^[=\-]{10,}/.test(s) || /^\[.+\]/.test(s);
+  const isSeparator = (s) => /^---\s*Ch\d+\s*---/.test(s) || /^[=\-]{10,}/.test(s);
   const bodyLines = outlineStart > 0 ? lines.slice(outlineStart) : [];
   const chapterRegex = /^(\d+)\s+(.+)/;
   const chapters = [];
@@ -135,6 +135,15 @@ async function designChapter(page, nthIndex, lines) {
     }
   }
 
+  // 滚动触发虚拟滚动/懒加载，确保当前页所有行已渲染
+  const allRows = page.locator('.ant-table-row');
+  const rowCnt = await allRows.count();
+  for (let i = Math.max(0, rowCnt - 4); i < rowCnt; i++) {
+    await allRows.nth(i).scrollIntoViewIfNeeded();
+    await page.waitForTimeout(200);
+  }
+  await page.waitForTimeout(500);
+
   const designBtns = page.getByRole('button', { name: '设计' });
   await designBtns.nth(localIndex).click();
   await page.waitForTimeout(10000);
@@ -219,7 +228,7 @@ async function designChapter(page, nthIndex, lines) {
 
   // 逐行输入，延迟 100ms/字符（含中文时避免丢字）
   for (let i = 0; i < lines.length; i++) {
-    await page.keyboard.type(lines[i], { delay: 100 });
+    await page.keyboard.type(lines[i], { delay: 60 });
     await page.waitForTimeout(200);
     if (i < lines.length - 1) {
       await page.keyboard.press('Enter');

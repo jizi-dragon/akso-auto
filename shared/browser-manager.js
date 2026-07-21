@@ -143,6 +143,23 @@ async function dismissAllPopups(page) {
   return dismissed;
 }
 
+/**
+ * 清理浏览器中所有多余的标签页，只保留一个 about:blank
+ * 解决 Chrome 持久化 user-data-dir 恢复历史会话导致的大量空白页/无关页面问题
+ */
+async function cleanupAllPages(browser) {
+  const contexts = browser.contexts();
+  for (const ctx of contexts) {
+    const pages = ctx.pages();
+    if (pages.length === 0) continue;
+    // 导航第一页到空白，关闭其余所有页面
+    await pages[0].goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }).catch(() => {});
+    for (let i = pages.length - 1; i >= 1; i--) {
+      await pages[i].close().catch(() => {});
+    }
+  }
+}
+
 function saveBrowserState(cdpPort) {
   const dir = path.dirname(BROWSER_STATE_FILE);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -168,7 +185,7 @@ function deleteBrowserState() {
 
 module.exports = {
   launchChromeDetached, connectBrowser, getBrowserInfo, login, closeBrowser,
-  disconnectBrowser, closeRemoteBrowser, dismissAllPopups,
+  disconnectBrowser, closeRemoteBrowser, dismissAllPopups, cleanupAllPages,
   saveBrowserState, readBrowserState, deleteBrowserState,
   DEFAULT_CDP_PORT, BROWSER_STATE_FILE
 };

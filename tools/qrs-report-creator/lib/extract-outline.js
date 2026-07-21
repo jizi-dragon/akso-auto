@@ -12,11 +12,27 @@ const path = require('path');
 const os = require('os');
 
 // 仅 Title、Heading1 和数字编号样式可产生 chapter 级标题
-const CHAPTER_STYLES = new Set(['Title', 'Heading1', '1', '2', '9']);
+const CHAPTER_STYLES = new Set(['Title', 'Heading1', '1', '2', '9', '10', '11']);
 // 所有可被识别为标题的样式
-const HEADING_STYLES = new Set(['Title', 'Heading1', 'Heading2', '1', '2', '3', '9', '26', '23']);
+const HEADING_STYLES = new Set(['Title', 'Heading1', 'Heading2', '1', '2', '3', '9', '10', '11', '19', '20', '26', '23']);
 const ATTACHMENT_KEYWORDS = ['附件', '附表'];
 const INDENT = '\u3000\u3000';
+
+/**
+ * 判断是否为纯目录条目（仅"目录"标题行）
+ */
+function isTocEntry(text) {
+  return text.trim() === '目录';
+}
+
+/**
+ * 清理目录条目末尾的页码数字
+ * "1. 系统概述1" → "1. 系统概述"
+ * "4 氮气监测趋势分析及评价7" → "4 氮气监测趋势分析及评价"
+ */
+function cleanTocTrailing(text) {
+  return text.replace(/\s*\d+$/, '').trim();
+}
 
 /**
  * 从 body 内容中提取有序的元素数组
@@ -31,11 +47,17 @@ function parseBodyElements(xml) {
   const elements = [];
 
   // 用正则匹配所有 w:p / w:tbl / w:sdt 的开闭标签位置
-  const tagRe = /<(\/)?(w:p|w:tbl|w:sdt)([\s>])/g;
+  // 注意：需正确处理自闭合标签（<w:p ... />），避免深度追踪卡死
+  const tagRe = /<(\/)?(w:p|w:tbl|w:sdt)([\s/][^>]*?)?(\/)?>/g;
   const positions = [];
   let m;
   while ((m = tagRe.exec(bodyContent)) !== null) {
-    positions.push({ index: m.index, isOpen: !m[1], tag: m[2] });
+    const selfClosing = !!m[4] || m[0].endsWith('/>');
+    if (m[1]) {
+      positions.push({ index: m.index, isOpen: false, tag: m[2], selfClosing: false });
+    } else {
+      positions.push({ index: m.index, isOpen: true, tag: m[2], selfClosing });
+    }
   }
 
   // 深度追踪，提取顶层元素边界
@@ -45,6 +67,14 @@ function parseBodyElements(xml) {
   let currentTag = '';
 
   for (const pos of positions) {
+    if (pos.selfClosing) {
+      // 自闭合标签：视为完整的顶层元素（不改变深度）
+      if (depth === 0) {
+        const selfCloseEnd = bodyContent.indexOf('>', pos.index) + 1;
+        topLevelEls.push({ start: pos.index, end: selfCloseEnd, tag: pos.tag });
+      }
+      continue;
+    }
     if (pos.isOpen) {
       if (depth === 0) {
         currentStart = pos.index;
@@ -174,6 +204,8 @@ function isDataValue(text) {
   if (/^(?:[≤<>≥]?\s*\d+(?:\.\d+)?\s*%)$/.test(t)) return true;
   if (/^\d+\.\d+\s*[-–]\s*\d+\.\d+$/.test(t)) return true;
   if (/^\d{4}\.\d{2}$/.test(t)) return true;
+  if (/^\d{4}\.\d{2}\.\d{2}[，\s-]/.test(t)) return true;
+  if (/^\d{4}\.\d{2}\.\d{2}$/.test(t)) return true;
   return false;
 }
 
@@ -262,28 +294,112 @@ function extractSections(bodyElements) {
     }
 
     // 附件内部：仅当再次遇到标题样式段落时才跳出
-    if (insideAttachment && !(HEADING_STYLES.has(style) && getSectionNum(text))) continue;
+    // CHAPTER_STYLE 段落始终放行（可能是新章节开始）
+    if (insideAttachment && !HEADING_STYLES.has(style)) continue;
+    if (insideAttachment && HEADING_STYLES.has(style) && !getSectionNum(text) && !CHAPTER_STYLES.has(style)) continue;
 
     // 标题样式段落
     if (HEADING_STYLES.has(style)) {
-      const secNum = getSectionNum(text);
-      // 无编号的标题样式段落 → 降级为正文
-      if (!secNum) {
-        if (currentSection && !currentSection.is_attachment) {
-          currentSection.content = currentSection.content || [];
-          currentSection.content.push(text);
+      // 跳过纯目录条目（"目录"行 或 末尾带页码的 TOC 行）
+      if (isTocEntry(text)) continue;
+
+      // 样式 9（TOC 条目）：清理末尾页码数字，作为真实标题使用
+      let workingText = text;
+      if (style === '9') {
+        workingText = cleanTocTrailing(text);
+      }
+
+      const secNum = getSectionNum(workingText);
+
+      // 无编号但属于子标题样式（19, 20）→ 作为隐式子标题
+      // 注意：样式 2 也可能是章标题，优先让 CHAPTER_STYLE 逻辑处理
+      if (!secNum && (style === '19' || style === '20')) {
+        // 样式 20 长段落是正文而非标题（如"从趋势图可以看出……"）
+        if (style === '20' && workingText.length > 25) {
+          if (currentSection && !currentSection.is_attachment) {
+            currentSection.content = currentSection.content || [];
+            currentSection.content.push(workingText);
+          }
+          continue;
+        }
+        if (parentChapter) {
+          implicitCounter++;
+          const implNum = parentChapter.sec_num + '.' + implicitCounter;
+          sections.push({
+            type: 'sub', title: implNum + ' ' + workingText, sec_num: implNum,
+            clean_title: workingText,
+            content: [], media_placeholders: [],
+            is_implicit: true
+          });
+          currentSection = sections[sections.length - 1];
         }
         continue;
       }
 
-      // 清理尾部页码（TOC 中可能黏在标题后的数字）
-      const cleanText = text.replace(/\s*\d+$/, '').trim();
-      const cleanName = cleanTitle(cleanText);
-      const isAttachment = ATTACHMENT_KEYWORDS.some(kw => cleanText.includes(kw));
+      // 无编号的标题样式段落
+      if (!secNum) {
+        // CHAPTER_STYLE 无编号 → 尝试匹配已有章节，否则创建隐式章节
+        if (CHAPTER_STYLES.has(style)) {
+          // 文本需像标题（短且非正文关键词），否则降级为正文
+          const bodyStartKw = ['备注', '注：', '说明', '注:', '附注'];
+          if (workingText.length > 40 || bodyStartKw.some(kw => workingText.startsWith(kw))) {
+            if (currentSection && !currentSection.is_attachment) {
+              currentSection.content = currentSection.content || [];
+              currentSection.content.push(workingText);
+            }
+            continue;
+          }
+          // 样式 2 在已有章节时作为隐式子标题（纯化水等文档用）
+          if (parentChapter && style === '2') {
+            implicitCounter++;
+            const implNum = parentChapter.sec_num + '.' + implicitCounter;
+            sections.push({
+              type: 'sub', title: implNum + ' ' + workingText, sec_num: implNum,
+              clean_title: workingText,
+              content: [], media_placeholders: [],
+              is_implicit: true
+            });
+            currentSection = sections[sections.length - 1];
+            continue;
+          }
+          const existing = sections.find(s => s.type === 'chapter' && s.clean_title === workingText);
+          if (existing) {
+            currentSection = existing;
+            parentChapter = existing;
+            implicitCounter = 0;
+            insideAttachment = existing.is_attachment || false;
+            continue;
+          }
+          const chNum = sections.filter(s => s.type === 'chapter').length + 1;
+          const isAtt = ATTACHMENT_KEYWORDS.some(kw => workingText.includes(kw));
+          sections.push({
+            type: 'chapter', title: chNum + ' ' + workingText, sec_num: String(chNum),
+            clean_title: workingText,
+            content: [], media_placeholders: [],
+            is_attachment: isAtt,
+            is_implicit: true
+          });
+          currentSection = sections[sections.length - 1];
+          parentChapter = currentSection;
+          implicitCounter = 0;
+          insideAttachment = isAtt;
+          continue;
+        }
+        // 其他样式无编号 → 降级为正文
+        if (currentSection && !currentSection.is_attachment) {
+          currentSection.content = currentSection.content || [];
+          currentSection.content.push(workingText);
+        }
+        continue;
+      }
 
-      // 仅 Title / Heading1 + 编号不含小数点 → chapter
+      // --- 以下：有编号的标题 ---
+      const cleanT = workingText.replace(/\s*\d+$/, '').trim();
+      const cleanName = cleanTitle(cleanT);
+      const isAttachment = ATTACHMENT_KEYWORDS.some(kw => cleanT.includes(kw));
+
+      // 仅 CHAPTER_STYLE + 编号不含小数点 → chapter
       if (CHAPTER_STYLES.has(style) && !secNum.includes('.')) {
-        // 去重：若已存在同编号 chapter，复用而非重复创建
         const existing = sections.find(s => s.type === 'chapter' && s.sec_num === secNum);
         if (existing) {
           currentSection = existing;
@@ -293,7 +409,7 @@ function extractSections(bodyElements) {
           continue;
         }
         sections.push({
-          type: 'chapter', title: cleanText, sec_num: secNum,
+          type: 'chapter', title: cleanT, sec_num: secNum,
           clean_title: cleanName,
           content: [], media_placeholders: [],
           is_attachment: isAttachment
@@ -305,10 +421,15 @@ function extractSections(bodyElements) {
         continue;
       }
 
-      // 编号含小数点 → sub
+      // 编号含小数点 → sub（含去重）
       if (secNum.includes('.')) {
+        const existing = sections.find(s => s.type === 'sub' && s.sec_num === secNum);
+        if (existing) {
+          currentSection = existing;
+          continue;
+        }
         sections.push({
-          type: 'sub', title: cleanText, sec_num: secNum,
+          type: 'sub', title: cleanT, sec_num: secNum,
           clean_title: cleanName,
           content: [], media_placeholders: [],
           is_attachment: isAttachment
@@ -322,16 +443,39 @@ function extractSections(bodyElements) {
       continue;
     }
 
-    // Normal 样式：显式编号 → sub（Normal 永远不会是 chapter）
+    // Normal 样式：显式编号
     const secNum = getSectionNum(text);
-    if (secNum && secNum.includes('.')) {
-      sections.push({
-        type: 'sub', title: text, sec_num: secNum,
-        clean_title: cleanTitle(text),
-        content: [], media_placeholders: []
-      });
-      currentSection = sections[sections.length - 1];
-      continue;
+    if (secNum && !isDataValue(text)) {
+      // 编号含小数点 → sub
+      if (secNum.includes('.')) {
+        sections.push({
+          type: 'sub', title: text, sec_num: secNum,
+          clean_title: cleanTitle(text),
+          content: [], media_placeholders: []
+        });
+        currentSection = sections[sections.length - 1];
+        continue;
+      }
+      // 编号无小数点 + 看起来像章标题 → chapter（如 "3 CAPA管理运行情况评估"）
+      const cleanName = cleanTitle(text);
+      const bodyStartKw = ['备注', '注：', '说明', '注:', '附注'];
+      if (cleanName.length <= 40 && !bodyStartKw.some(kw => cleanName.startsWith(kw))) {
+        const chIdx = sections.filter(s => s.type === 'chapter').length + 1;
+        if (secNum === String(chIdx)) {
+          const isAtt = ATTACHMENT_KEYWORDS.some(kw => text.includes(kw));
+          sections.push({
+            type: 'chapter', title: text, sec_num: secNum,
+            clean_title: cleanName,
+            content: [], media_placeholders: [],
+            is_attachment: isAtt
+          });
+          currentSection = sections[sections.length - 1];
+          parentChapter = currentSection;
+          implicitCounter = 0;
+          insideAttachment = isAtt;
+          continue;
+        }
+      }
     }
 
     // Normal 样式：隐式标题检测
