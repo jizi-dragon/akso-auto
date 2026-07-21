@@ -12,7 +12,7 @@ const path = require('path');
 const os = require('os');
 
 // 仅 Title、Heading1 和数字编号样式可产生 chapter 级标题
-const CHAPTER_STYLES = new Set(['Title', 'Heading1', '1', '2', '9', '10', '11']);
+const CHAPTER_STYLES = new Set(['Title', 'Heading1', '1', '2', '3', '9', '10', '11']);
 // 所有可被识别为标题的样式
 const HEADING_STYLES = new Set(['Title', 'Heading1', 'Heading2', '1', '2', '3', '9', '10', '11', '19', '20', '26', '23']);
 const ATTACHMENT_KEYWORDS = ['附件', '附表'];

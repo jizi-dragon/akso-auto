@@ -31,14 +31,6 @@ const { extractOutline } = require('./lib/extract-outline');
 const { reviewQuality, formatReviewReport } = require('./lib/review-outline');
 
 const QRS_DIR = path.join(__dirname, '..', '..', 'output', 'qrs');
-const TXT_DIR = path.join(QRS_DIR, 'txt');
-const PLAN_DIR = path.join(QRS_DIR, 'plan');
-const TEMP_DIR = path.join(QRS_DIR, 'temp');
-
-// 确保子目录存在
-fs.mkdirSync(TXT_DIR, { recursive: true });
-fs.mkdirSync(PLAN_DIR, { recursive: true });
-fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const EXTRACT_SCRIPT = path.join(__dirname, 'lib', 'extract-outline.py');
 
@@ -76,7 +68,7 @@ async function doExtract(config) {
 
   if (!config.output) {
     const base = path.basename(config.input, '.docx');
-    config.output = path.join(TXT_DIR, '大纲_' + base + '.txt');
+    config.output = path.join(QRS_DIR, base, '大纲.txt');
   }
 
   console.log(`[提取] 输入: ${config.input}`);
@@ -125,6 +117,17 @@ async function doExtract(config) {
 
   createState(config.output, { inputPath: config.input, chapterCount, reviewed: true, reviewIssues });
 
+  // 生成 check.md 证据文件
+  const { createCheckFile } = require('./lib/checklist-manager');
+  const { chapters: allChs } = parseOutline(config.output);
+  const checkFp = createCheckFile(config.output, {
+    extractedAt: new Date().toISOString(),
+    inputPath: config.input,
+    chapterCount,
+    reviewIssues: reviewIssues || undefined
+  }, allChs.map(c => ({ num: c.num, title: c.title })));
+  console.log(`[证据] check.md → ${checkFp}`);
+
   console.log(`\n[提取] 完成 → ${config.output}`);
   console.log(`[提取] 章节数: ${chapterCount}`);
   if (reviewIssues > 0) console.log(`⚠ 审查发现问题 ${reviewIssues} 处，请检查上述报告后修订大纲`);
@@ -146,6 +149,11 @@ async function doCreate(config, page) {
 
   await createChapters(page, toc);
   console.log(`[创建] 完成`);
+
+  // 标记创建章节完成
+  const { markCheckItem } = require('./lib/checklist-manager');
+  markCheckItem(outlinePath, '创建章节');
+  console.log(`[创建] check.md 已勾选「创建章节」`);
 }
 
 async function doDesign(config, page) {
@@ -168,23 +176,32 @@ async function doDesign(config, page) {
     targetChapters = chapters;
   }
 
-  // 读取或创建 checklist
-  const { createChecklist, markChapterDone, readChecklist } = require('./lib/checklist-manager');
-  let doneChapters = readChecklist(outlinePath);
-  if (doneChapters === null) {
-    // 首次设计，创建 checklist
-    createChecklist(outlinePath, targetChapters.map(c => ({ num: c.num, title: c.title })));
-    doneChapters = [];
+  // 校验现有清单与当前大纲的一致性（自动清理幻影条目）
+  const { validateChecklist, rebuildChecklist, markChapterDone } = require('./lib/checklist-manager');
+  const currentChapters = targetChapters.map(c => ({ num: c.num, title: c.title }));
+  const { valid, orphaned } = validateChecklist(outlinePath, currentChapters);
+
+  if (orphaned.length > 0) {
+    const orphanNums = orphaned.map(o => `Ch${o.num}`).join(', ');
+    console.log(`[校验] 清单含 ${orphaned.length} 个无效条目 (${orphanNums})，自动清理`);
+    rebuildChecklist(outlinePath, valid, currentChapters);
+  } else if (valid.length > 0) {
+    console.log(`[校验] 清单一致，${valid.length} 个已完成，跳过: Ch${valid.join(', Ch')}`);
   }
 
-  // 过滤掉已完成的章节
-  const pendingChapters = targetChapters.filter(c => !doneChapters.includes(String(c.num)));
+  // 仅创建新章节的待办项（valid 中没有的）
+  const newChapters = currentChapters.filter(c => !valid.includes(String(c.num)));
+  if (newChapters.length > 0) {
+    rebuildChecklist(outlinePath, valid, currentChapters);
+  }
+
+  const pendingChapters = targetChapters.filter(c => !valid.includes(String(c.num)));
   if (pendingChapters.length === 0) {
     console.log('[设计] 所有章节已完成');
     return;
   }
 
-  console.log(`[设计] 待设计 ${pendingChapters.length} 章（已跳过 ${targetChapters.length - pendingChapters.length} 已完成）`);
+  console.log(`[设计] 待设计 ${pendingChapters.length} 章（已跳过 ${valid.length} 已完成）`);
 
   let completed = 0;
   let failed = 0;
@@ -319,7 +336,7 @@ async function main() {
     if (!fs.existsSync(outlinePath)) { console.error(`大纲文件不存在: ${outlinePath}`); process.exit(1); }
 
     const state = approve(outlinePath);
-    if (!state) { console.error('未找到审批状态文件，请先执行 extract'); process.exit(1); }
+    if (!state) { console.error('未找到 check.md，请先执行 extract'); process.exit(1); }
     console.log(`✅ 审批通过`);
     console.log(`   大纲: ${path.basename(outlinePath)}`);
     console.log(`   章节数: ${state.chapterCount}`);
@@ -334,7 +351,7 @@ async function main() {
 
     const state = readState(outlinePath);
     if (!state) {
-      console.log('状态: 尚未执行 extract（无审批状态文件）');
+      console.log('状态: 尚未执行 extract（无 check.md）');
       process.exit(0);
     }
     console.log(`状态:`);

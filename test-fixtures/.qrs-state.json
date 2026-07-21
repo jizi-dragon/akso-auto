@@ -1,0 +1,10 @@
+{
+  "outlinePath": "d:\\akso\\akso-auto\\test-fixtures\\大纲_2025年一期水站纯化水系统年度质量回顾报告.txt",
+  "inputPath": "d:\\akso\\akso-auto\\test-fixtures\\2025年一期水站纯化水系统年度质量回顾报告.docx",
+  "extractedAt": "2026-07-17T05:51:41.589Z",
+  "approved": false,
+  "approvedAt": null,
+  "chapterCount": 14,
+  "reviewed": true,
+  "reviewIssues": 3
+}

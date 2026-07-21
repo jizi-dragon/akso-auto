@@ -1,0 +1,22 @@
+# Checklist
+
+- [x] `tools/akso-gmp/` 目录存在，包含 `index.js`、`README.md`、`lib/`
+- [x] `tools/akso-gmp/lib/` 含 `playbooks/blueprint-template.md` 和 `export/pack.sh`
+- [x] `tools/akso-gmp/README.md` 不含 YAML front-matter，内部无"Skill"指代另外两个模块
+- [x] `tools/akso-basic-config/` 目录存在，包含 `index.js`、`README.md`、`lib/`
+- [x] `tools/akso-basic-config/lib/` 下所有 JS 文件的 `shared/browser-manager` 引用路径正确（`../../shared/browser-manager`）
+- [x] `tools/akso-basic-config/README.md` 不含 YAML front-matter，为纯 Markdown 工具说明
+- [x] `tools/akso-basic-config/` 下无 `CHANGELOG.md`、无 `SKILL.md`
+- [x] `tools/akso-basic-config-api/` 目录存在，包含 `index.js`、`README.md`、`lib/`
+- [x] `tools/akso-basic-config-api/lib/` 下所有 JS 文件的 `shared/browser-manager` 引用路径正确（`../../shared/browser-manager`）
+- [x] `tools/akso-basic-config-api/README.md` 不含 YAML front-matter，为纯 Markdown 工具说明
+- [x] `tools/akso-basic-config-api/` 下无 `SKILL.md`
+- [x] 任意两个工具之间不存在跨工具的 `require()` 代码引用
+- [x] `.trae/skills/akso-gmp/` 已删除
+- [x] `.trae/skills/akso-basic-config/` 已删除
+- [x] `.trae/skills/akso-basic-config-api/` 已删除
+- [x] `d:\akso\akso-auto\scripts\` 已删除
+- [x] `project_rules.md` 中 Skill 相关内容已更新（清单为空或章节重写）
+- [x] `project_rules.md` 二、工具开发规范中追加了"工具变更必须同步 README"
+- [x] 根 `README.md` 工具列表列出 5 个工具
+- [x] 根 `README.md` 中已移除 Skill 相关说明

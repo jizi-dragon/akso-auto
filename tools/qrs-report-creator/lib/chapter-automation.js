@@ -23,7 +23,7 @@ function parseOutline(outlinePath) {
 
   // 解析 TOC：仅从 [TOC 目录] 板块提取，严格匹配 "N 标题名" 格式
   const toc = [];
-  const tocChapterRegex = /^(\d+)\s+(.+)/;
+  const tocChapterRegex = /^(\d{1,2})\s+(.+)/;
   if (tocStart > 0 && tocEnd > tocStart) {
     for (let i = tocStart; i <= tocEnd; i++) {
       const l = lines[i].trim();
@@ -38,7 +38,7 @@ function parseOutline(outlinePath) {
   // 解析正文：过滤分隔符（--- ChN --- / ====== / ------ / [板块标题]）
   const isSeparator = (s) => /^---\s*Ch\d+\s*---/.test(s) || /^[=\-]{10,}/.test(s);
   const bodyLines = outlineStart > 0 ? lines.slice(outlineStart) : [];
-  const chapterRegex = /^(\d+)\s+(.+)/;
+  const chapterRegex = /^(\d{1,2})\s+(.+)/;
   const chapters = [];
   let currentChapter = null;
 

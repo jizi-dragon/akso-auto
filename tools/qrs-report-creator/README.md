@@ -36,7 +36,7 @@ Step 3: design   → 逐章写入 ONLYOFFICE 编辑器
 | 目录 | 用途 |
 |------|------|
 | `test-fixtures/` | 存放测试用例（.docx 文件） |
-| `output/qrs/` | QRS 工具运行时产物（大纲文件、状态文件、CDP 状态等） |
+| `output/qrs/<报告名>/` | 以报告为单位的项目文件夹，含大纲.txt + check.md + 浏览器状态 |
 
 ## 依赖
 
@@ -52,19 +52,20 @@ Step 3: design   → 逐章写入 ONLYOFFICE 编辑器
 ```
 extract (提取大纲)
   │
-  ├─ 生成 完整大纲.txt（三板块：TOC / 子标题结构 / 大纲+文字段落）
-  ├─ 创建 .qrs-state.json（标记 approved: false）
+  ├─ 生成 大纲.txt + check.md（含证据戳 + 执行进度 + 章节清单）
+  ├─ check.md 中「审阅通过」初始未勾选
   └─ 提示用户审查
         │
         ▼ (用户审查大纲内容)
         │
   approve (标记审批)
-  ├─ 更新 .qrs-state.json（approved: true）
+  ├─ 勾选 check.md 中「审阅通过」
   └─ 提示可执行 create / design
         │
         ▼
   create / design (写入系统)
-  └─ 全部完成后 → close (关闭浏览器)
+  ├─ create 完成后勾选「创建章节」
+  └─ design 逐章勾选章节设计清单
 ```
 
 ## 命令行参数速查
@@ -147,6 +148,7 @@ tools/qrs-report-creator/
     ├── extract-outline.js       # Node.js 文档大纲提取器（首选，含表格/图片检测）
     ├── chapter-automation.js    # 浏览器自动化模块（登录 / 创建 / 设计）
     ├── state-manager.js         # 审批状态管理（.qrs-state.json）
+    ├── checklist-manager.js     # 章节设计清单管理（断点续传 + 自动校验）
     └── review-outline.js        # AI 二次审查模块（结构质量检测）
 ```
 
@@ -158,9 +160,12 @@ tools/qrs-report-creator/
 - 重新执行 extract 会重置审批状态，需重新 approve
 - 附件章节（含"附件""附表"关键词）会自动跳过内容写入
 - extract 后可对大纲文件执行质量审查：`node tools/qrs-report-creator/lib/review-outline.js --input 完整大纲.txt`，使用 `--fix` 自动修复部分问题
+- **断点续传**：design 阶段支持中断恢复。已完成的章节自动跳过，失败章节可修改后重试。
+- **自动校验**：design 执行前校验章节清单与当前大纲的一致性，自动清理因大纲变更产生的无效条目，保留有效已完成章节。
+- **check.md 为单一证据源**：extract 时与大纲同步产出，包含证据戳、执行进度（审阅通过/创建章节）、章节设计清单。AI 可通过 check.md 了解当前进度。
 - **浏览器持久化**：首次 create/design 启动浏览器后，后续操作复用同一实例。全部完成后务必执行 `close` 清理浏览器和状态文件
 
-## 完整大纲.txt 格式说明
+## 大纲.txt 格式说明
 
 `extract` 生成的大纲文件为纯文本，部分行具有特定含义：
 
