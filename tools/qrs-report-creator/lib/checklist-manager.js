@@ -102,9 +102,9 @@ function markCheckItem(outlinePath, label) {
   const content = fs.readFileSync(fp, 'utf-8');
   const lines = content.split('\n');
 
-  // 构建匹配模式：行首 "- [ ] " 后跟 label
+  // 构建匹配模式：行首 "- [ ] " 后跟 label（允许 label 后跟空格及更多文本）
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`^(\\- \\[ \\]) ${escaped}$`);
+  const pattern = new RegExp(`^(\\- \\[ \\]) ${escaped}(\\s|$)`);
 
   let found = false;
   for (let i = 0; i < lines.length; i++) {

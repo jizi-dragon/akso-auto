@@ -99,9 +99,15 @@ function parseBodyElements(xml) {
       const style = extractParagraphStyle(elXml);
       const leftIndent = extractParagraphLeftIndent(elXml);
 
-      // 段落含图片标记 → 图片占位符
+      // 段落含图片标记 → 若含节编号文本，优先当作段落处理
       if (/<(?:w:drawing|wp:inline|a:blip)/.test(elXml)) {
-        elements.push({ type: 'img', text, style, leftIndent });
+        const secNum = getSectionNum(text);
+        if (text && secNum) {
+          // 有节编号的图文段落 → 保留为段落（文本优先）
+          elements.push({ type: 'p', text, style, leftIndent });
+        } else {
+          elements.push({ type: 'img', text, style, leftIndent });
+        }
       } else if (text) {
         elements.push({ type: 'p', text, style, leftIndent });
       }
@@ -210,12 +216,19 @@ function isDataValue(text) {
 }
 
 function getSectionNum(title) {
-  const m = title.match(/^(\d+(?:\.\d+)*)/);
+  // 限制子节编号为 1-2 位数字，且必须以非数字结尾（避免 "4.2.2026" 中的 "20" 被误匹配）
+  const m = title.match(/^(\d+(?:\.\d{1,2})*)(?=[^\d]|$)/);
   return m ? m[1] : null;
 }
 
-function cleanTitle(title) {
-  return title.replace(/^[\d.]+\s*/, '');
+function cleanTitle(title, secNum) {
+  if (secNum) {
+    // 精确去掉 secNum 前缀（含后续分隔符 . 、 、空格）
+    const prefix = secNum.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return title.replace(new RegExp('^' + prefix + '[.、\\s]*'), '').trim();
+  }
+  // 降级方案：去掉常见编号前缀
+  return title.replace(/^[\d.]+\s*[、]?\s*/, '').trim();
 }
 
 /**
@@ -228,6 +241,20 @@ function looksLikeImplicitHeading(text, leftIndent, nextElements) {
   if (bodyKw.some(kw => text.startsWith(kw))) return false;
   const next = nextElements.find(el => el.type === 'p');
   return next && next.leftIndent === 360045 && next.text.length > 20;
+}
+
+/**
+ * 从 Normal 样式段落中提取章名称
+ * 处理嵌入子节编号的情况：如 "3.质量管理系统运行情况3.1 体系..." → "质量管理系统运行情况"
+ */
+function extractChapterName(text) {
+  let name = text.replace(/^[\d.]+\s*[、]?\s*/, '');
+  // 若含嵌入子节编号（如 "xxx3.1"），截断到子节前
+  const embedded = name.match(/^(.*?)\s*\d+\.\d+/);
+  if (embedded) {
+    name = embedded[1].trim();
+  }
+  return name;
 }
 
 /**
@@ -395,7 +422,7 @@ function extractSections(bodyElements) {
 
       // --- 以下：有编号的标题 ---
       const cleanT = workingText.replace(/\s*\d+$/, '').trim();
-      const cleanName = cleanTitle(cleanT);
+      const cleanName = cleanTitle(cleanT, secNum);
       const isAttachment = ATTACHMENT_KEYWORDS.some(kw => cleanT.includes(kw));
 
       // 仅 CHAPTER_STYLE + 编号不含小数点 → chapter
@@ -446,20 +473,30 @@ function extractSections(bodyElements) {
     // Normal 样式：显式编号
     const secNum = getSectionNum(text);
     if (secNum && !isDataValue(text)) {
+      // 中文列表项（N、格式）→ 降级为正文，不创建章节
+      // 例："3、执行中的变更" 是 Ch2.5 下的列表项，非 Ch3
+      if (/^\d+、/.test(text)) {
+        if (currentSection && !currentSection.is_attachment) {
+          currentSection.content = currentSection.content || [];
+          currentSection.content.push(text);
+        }
+        continue;
+      }
+
       // 编号含小数点 → sub
       if (secNum.includes('.')) {
         sections.push({
           type: 'sub', title: text, sec_num: secNum,
-          clean_title: cleanTitle(text),
+          clean_title: cleanTitle(text, secNum),
           content: [], media_placeholders: []
         });
         currentSection = sections[sections.length - 1];
         continue;
       }
       // 编号无小数点 + 看起来像章标题 → chapter（如 "3 CAPA管理运行情况评估"）
-      const cleanName = cleanTitle(text);
+      const cleanName = extractChapterName(text);
       const bodyStartKw = ['备注', '注：', '说明', '注:', '附注'];
-      if (cleanName.length <= 40 && !bodyStartKw.some(kw => cleanName.startsWith(kw))) {
+      if (cleanName.length > 0 && cleanName.length <= 40 && !bodyStartKw.some(kw => cleanName.startsWith(kw))) {
         const chIdx = sections.filter(s => s.type === 'chapter').length + 1;
         if (secNum === String(chIdx)) {
           const isAtt = ATTACHMENT_KEYWORDS.some(kw => text.includes(kw));
