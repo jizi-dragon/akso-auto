@@ -1,11 +1,11 @@
 # Akso eGMP 基础配置 — API 直调版 (Phase 2)
 
-> **版本**：v0.5.0 — Playwright npm 包统一执行版  
+> **版本**：v0.5.1 — Playwright npm 包统一执行版  
 > **适用对象**：WorkBuddy AI Agent  
 > **执行入口**：Playwright npm 包 → `page.evaluate(fetch)`，由 `shared/browser-manager.js` 管理浏览器生命周期  
 > **原则**：登录走浏览器 DOM（`shared/browser-manager.js`），配置走 HTTP API。一次登录，全程 API 直调。  
 > **性能**：DOM 模式 2 分钟 → API 模式 3 秒（40x 提速）  
-> **覆盖**：10 个模块 / 12 个核心 API（✅）+ 8 个待验证 API（⚠️）/ 14 种字段类型  
+> **覆盖**：10 个模块 / 16 个核心 API（✅）+ 10 个待验证/待完善 API（⚠️）/ 14 种字段类型  
 > **环境信息**：存储于外部 `AksoGMP_配置环境清单.xlsx`，本工具不含密码
 
 > 📂 **文件结构**：
@@ -395,135 +395,302 @@ const { createTextField, createNumberField, createDateField, queryFields } = req
 
 ---
 
-## 五、⭐ 表单布局 — Layout/SaveLayoutDetail
+## 五、⭐ 表单布局 — Layout
 
-```
-POST /api/platform/Layout/SaveLayoutDetail
+### 5.1 核心概念
 
-核心结构：
-{
-  "id":           "布局ID（新建时可省略）",
-  "objectId":     "对象UUID",
-  "code":         "layout_code",
-  "name":         "布局名称",
-  "source":       2,
-  "status":       1,
-  "objectTypeId": "对象类型UUID",
-  "isMain":       true,
-  "labelCol":     0,
-  "sections": [
-    {
-      "id":          "section_uuid",
-      "code":        "section_code__cs",
-      "name":        "分区名称",
-      "type":        1,              // 1=标准分区, 4=工作流时间线
-      "columnsNum":  2
-    }
-  ],
-  "controls": [
-    {
-      "id":         "control_uuid",
-      "sectionId":  "所属section UUID",
-      "code":       "字段code",
-      "name":       "字段显示名",
-      "fieldId":    "字段UUID",
-      "type":       "组件类型（见下表）",
-      "gridSpan":   1,
-      "attrs":      {}
-    }
-  ],
-  "pages":      [],
-  "rules":      [],
-  "activePageCode":   null,
-  "activeSectionCode": null
-}
-```
+**默认表单布局：** 每个对象创建时系统自动生成一个默认表单布局，`source: 2`（标准），code 格式为 `{对象code}_base_layout__ak`，`isMain: true`。通常只需在默认布局上修改，无需新建。
 
-**control.type 组件映射：**
+**部分（Section）vs 控件（Control）：**
+- **部分（section）**：容器/盒子，用于组织和展示控件。`type: 1` 为标准分区，`type: 4` 为工作流时间线（系统自带，不可删除）。
+- **控件（control）**：将字段展示到布局中的 UI 组件，通过 `sectionId` 归属到某个部分。
 
-| type | 对应字段 |
-|------|---------|
-| (空/默认) | 文本/数字/日期等基础类型 |
-| `AKRichTextEditor` | 富文本 |
-| `AKDateTime` | 日期/日期时间 |
-| `AKSelectorObjectMulti` | 对象多选 |
-| `AKFile` | 附件/文件 |
+**SaveLayoutDetail 是全量替换：** sections 和 controls 打包在一个请求中全量提交。不在数组中的部分/控件会被移除，修改前应先用 `getFormLayoutDetail` 读取现有结构。
 
-### 5.2 代码示例
+### 5.2 相关 API
+
+| API | 用途 |
+|-----|------|
+| `GET Layout/LayoutList` | 查询对象的表单布局列表 |
+| `GET Layout/LayoutDetail` | 获取布局详情（含已有 sections 和 controls） |
+| `POST Layout/SaveLayoutDetail` | 保存表单布局（全量替换 sections + controls） |
+
+### 5.3 API 详情
+
+#### getFormLayouts(page, objectId)
+查询对象的所有表单布局，返回的列表中包含默认布局（`source: 2`）。
+
+#### getFormLayoutDetail(page, layoutId)
+获取表单布局的完整详情，包含已有的 `sections` 和 `controls` 数组。修改布局前必须先调用此函数。
+
+#### saveFormLayout(page, config)
+全量提交 sections 和 controls。参数：
+- `id` — 布局 UUID（修改已有布局时必传）
+- `objectId` / `objectTypeId` — 对象 UUID 和类型 UUID
+- `name` / `code` — 布局名称和 code
+- `sections` — 部分数组，每个 section 最小字段：`{ id, code, name, type, columnsNum }`
+- `controls` — 控件数组，每个 control 最小字段：`{ id, sectionId, code, name, fieldId, type, gridSpan, attrs }`
+
+#### CONTROL_TYPE 常量
+| 常量 | 值 | 对应字段类型 |
+|------|-----|-------------|
+| `CONTROL_TYPE.INPUT` | `AKInput` | 文本/数字 |
+| `CONTROL_TYPE.SELECTOR_SINGLE` | `AKSelectorSingle` | 选项（单选） |
+| `CONTROL_TYPE.SELECTOR_MULTI` | `AKSelectorMulti` | 选项（多选） |
+| `CONTROL_TYPE.SELECTOR_OBJECT` | `AKSelectorObject` | 对象查找 |
+| `CONTROL_TYPE.SELECTOR_YES_NO` | `AKSelectorYesNo` | 是否 |
+| `CONTROL_TYPE.DATE_TIME` | `AKDateTime` | 日期/日期时间 |
+| `CONTROL_TYPE.FILE` | `AKFile` | 附件/文件 |
+| `CONTROL_TYPE.RICH_TEXT` | `AKRichTextEditor` | 富文本 |
+
+### 5.4 代码示例
+
+#### 场景一：在默认布局上添加部分和控件
 
 ```javascript
-const { launchBrowser, login, closeBrowser } = require('../../shared/browser-manager');
-const { saveFormLayout } = require('./lib/save-form-layout');
+const { getFormLayouts, getFormLayoutDetail, saveFormLayout, CONTROL_TYPE } = require('./lib/save-form-layout');
 
-(async () => {
-  const { browser, page } = await launchBrowser();
-  await login(page);
-  
-  const result = await saveFormLayout(page, {
-    objectId: '对象UUID',
-    objectTypeId: '对象类型UUID',
-    name: '主表单布局',
-    code: 'layout_main_form',
-    sections: [{ id: 'sec1', code: 'sec1__cs', name: '基本信息', type: 1, columnsNum: 2 }],
-    controls: [{
-      id: 'ctrl1', sectionId: 'sec1',
-      code: 'no__c', name: '编号', fieldId: '字段UUID',
-      type: '', gridSpan: 1, attrs: {}
-    }]
-  });
-  console.log(result.message); // → '布局[主表单布局]保存成功'
-  
-  await closeBrowser(browser);
-})();
+// 1. 获取默认布局
+const { layouts } = await getFormLayouts(page, '对象UUID');
+const defaultLayout = layouts.find(l => l.source === 2);
+
+// 2. 读取现有结构（含已有的 sections 和 controls）
+const { layout: detail } = await getFormLayoutDetail(page, defaultLayout.id);
+
+// 3. 追加新部分和新控件后保存
+const sectionId = 'd8646cad-b3a2-4243-9948-764dbfc5248f'; // 需生成 UUID
+await saveFormLayout(page, {
+  id: defaultLayout.id,
+  objectId: defaultLayout.objectId,
+  objectTypeId: defaultLayout.objectTypeId,
+  name: defaultLayout.name,
+  code: defaultLayout.code,
+  // 保留原有 sections（如"工作流时间线"）+ 新 section
+  sections: [
+    ...detail.sections,
+    { id: sectionId, code: 'cs1__cs', name: '基本信息', type: 1, columnsNum: 2 }
+  ],
+  controls: [
+    ...detail.controls,
+    { id: 'uuid1', sectionId, code: 'no__c', name: '编号',
+      fieldId: '字段UUID', type: CONTROL_TYPE.INPUT, gridSpan: 1, attrs: {} },
+    { id: 'uuid2', sectionId, code: 'created_time__sys', name: '创建时间',
+      fieldId: '字段UUID', type: CONTROL_TYPE.DATE_TIME, gridSpan: 1, attrs: {} }
+  ]
+});
+```
+
+#### 场景二：查看某对象的默认表单布局
+
+```javascript
+const { getFormLayouts } = require('./lib/save-form-layout');
+
+const { layouts } = await getFormLayouts(page, '对象UUID');
+const defaultLayout = layouts.find(l => l.source === 2 && l.isMain);
+console.log(`默认布局: ${defaultLayout.name} (${defaultLayout.code})`);
 ```
 
 ---
 
 ## 六、⭐ 列表布局 — Listlayout
 
+### 6.1 核心概念
+
+**默认列表布局**：每个对象创建时系统自动生成一个默认列表布局，`source: 2`（标准），
+code 格式为 `{对象code}_table__ak`。默认布局的显示字段可直接通过 API 修改，无需先创建。
+
+**新建列表布局**：通过 `Listlayout/Save` 创建，`source: 3`（自定义）。
+
+**`AddColumns` 是全量替换**：发送完整的列集合，不在集合中的列会被移除。该 API 名虽有"Add"但实际语义是 set/replace。
+（注：前端 UI 可能有自动补字段的行为，但 API 层面是纯替换，完全可控。）
+
+**跨对象字段**：通过查找字段（dataType=15）关联到另一对象时，可引用该对象上的字段。
+`fieldPath` 使用**点号路径**：`{查找字段code}.{关联对象字段code}`，如 `obj_field__c.applicant__c`。
+`fieldId` 始终是目标字段自身的 UUID，与所属对象无关。
+可用字段列表通过 `GET /api/platform/BasicObject/FieldsAndOutField` 查询。
+
+### 6.2 相关 API
+
+| API | 方法 | 用途 | 关键响应字段 |
+|-----|------|------|------------|
+| `/api/platform/Listlayout/List` | GET | 查询对象的所有列表布局 | `data[]` 含 `id/name/code/source`（source=2 为默认） |
+| `/api/platform/Listlayout/Columns` | GET | 查询布局的当前显示字段 | `data[]` 含 `fieldId/fieldPath/sort/fieldName` |
+| `/api/platform/Listlayout/Save` | POST | 创建新列表布局 | `data.id` 为新布局 UUID |
+| `/api/platform/Listlayout/AddColumns` | POST | **设置**显示字段（全量替换） | 请求参数：`listlayoutId` + `listlayoutColumns[]` |
+
+### 6.3 API 请求/响应详情
+
 ```
--- 步骤1：创建列表布局
+-- 创建列表布局
 POST /api/platform/Listlayout/Save
 请求：{ status:1, source:3, sortFields:[], name:"列表名", code:"code__c", objectTypeId:"uuid", objectId:"uuid" }
-响应：data: { id: "新建UUID" }  ⚠️ 返回对象非字符串！取 resp.data.id
+响应：{ code: 0, data: { id: "新建UUID" } }
 
--- 步骤2：添加显示列
+-- 设置显示字段（全量替换）
 POST /api/platform/Listlayout/AddColumns
 请求：
 {
-  "listlayoutId": "上一步返回的UUID",
+  "listlayoutId": "布局UUID",
   "listlayoutColumns": [
     { "fieldId":"字段UUID", "fieldPath":"字段code", "sort":1 },
     { "fieldId":"字段UUID", "fieldPath":"字段code", "sort":2 }
   ]
 }
-响应：{ code: 0, data: true }
+响应：{ code: 0, data: 新增列数 }
 ```
 
-### 6.3 代码示例
+### 6.4 代码示例
+
+#### 场景 A：修改默认列表布局的显示字段
 
 ```javascript
-const { launchBrowser, login, closeBrowser } = require('../../shared/browser-manager');
-const { saveListLayout, addListColumns } = require('./lib/save-list-layout');
+const { chromium } = require('playwright');
+const { login, closeBrowser } = require('../../shared/browser-manager');
+const { getListLayouts, getListColumns, setListColumns } = require('./lib/save-list-layout');
 
 (async () => {
-  const { browser, page } = await launchBrowser();
+  const browser = await chromium.launch({ headless: false });
+  const page = await (await browser.newContext()).newPage();
   await login(page);
-  
-  const r = await saveListLayout(page, {
-    name: '变更列表', code: 'list_change_list',
-    objectId: '对象UUID', objectTypeId: '对象UUID'
-  });
-  if (r.success) {
-    await addListColumns(page, r.layoutId, [
-      { fieldId: '字段UUID1', fieldPath: 'no__c', sort: 1 },
-      { fieldId: '字段UUID2', fieldPath: 'title__c', sort: 2 }
-    ]);
-    console.log('列表布局创建完成');
-  }
-  
+
+  const objectId = '对象UUID';
+
+  // 1. 获取默认布局
+  const { layouts } = await getListLayouts(page, objectId);
+  const defaultLayout = layouts.find(l => l.source === 2);
+
+  // 2. 查看当前列
+  const { columns } = await getListColumns(page, defaultLayout.id);
+  console.log('现有列:', columns.map(c => c.fieldName));
+
+  // 3. 设置新列（全量替换）
+  await setListColumns(page, defaultLayout.id, [
+    { fieldId: '字段UUID1', fieldPath: 'is_deleted__sys', sort: 1 },
+    { fieldId: '字段UUID2', fieldPath: 'status_id__sys', sort: 2 },
+    { fieldId: '字段UUID3', fieldPath: 'name__ak', sort: 3 }
+  ]);
+
   await closeBrowser(browser);
 })();
+```
+
+#### 场景 B：创建新列表布局 + 设置字段
+
+```javascript
+const { saveListLayout, setListColumns } = require('./lib/save-list-layout');
+
+const r = await saveListLayout(page, {
+  name: '变更列表', code: 'list_change_list',
+  objectId: '对象UUID', objectTypeId: '对象UUID'
+});
+if (r.success) {
+  await setListColumns(page, r.layoutId, [
+    { fieldId: '字段UUID1', fieldPath: 'no__c', sort: 1 },
+    { fieldId: '字段UUID2', fieldPath: 'title__c', sort: 2 }
+  ]);
+}
+```
+
+#### 场景 C：跨对象字段（点号路径）
+
+```javascript
+// 引用关联对象"晚餐计划"上的"干饭人"字段
+await setListColumns(page, layoutId, [
+  { fieldId: '...', fieldPath: 'name__ak',           sort: 1 },
+  { fieldId: '...', fieldPath: 'obj_field__c.applicant__c', sort: 2 }
+  //                          ↑ 查找字段code    ↑ 关联对象字段code
+]);
+// fieldId 始终是目标字段自身的 UUID
+```
+
+---
+
+### 6.5 数据过滤（⚠️ 待完善）
+
+> **当前进度**：API 路径和请求结构已确认，但 `logicType` 枚举仅确认 4 种（后续补充）。  
+> **应用场景**：限制列表数据可见范围（如仅显示当前用户创建的记录）、过滤特定状态等。
+
+#### API
+
+| API | 方法 | 用途 |
+|-----|------|------|
+| `/api/platform/Listlayout/Filters` | GET | 查询当前过滤配置 |
+| `/api/platform/Listlayout/SaveFilter` | POST | 保存过滤配置（upsert：首次不传 id，二次传 id） |
+
+#### 请求结构
+
+```json
+POST /api/platform/Listlayout/SaveFilter
+{
+  "belongId": "布局UUID",
+  "id": "过滤UUID",        // 首次不传，更新时传首次返回的 id
+  "details": [
+    {
+      "id": "客户端生成UUID",
+      "index": 1784705272217,
+      "relationId": "逻辑组UUID",    // 关联到 relations 中的组
+      "targetType": 1,
+      "targetId": "字段UUID",
+      "targetCode": "created_time__sys",
+      "logicType": 4,               // 1=等于, 4=晚于, 10=为空, 11=不为空 ⚠️
+      "logicValue": "\"2026-07-01\"",
+      "targetFieldDataType": 7
+    }
+  ],
+  "relations": [
+    {
+      "id": "逻辑组UUID",
+      "parentId": "父组UUID",       // null 表示根组
+      "logicalOperator": 1,         // 1=AND, 2=OR
+      "index": 1784705270941
+    }
+  ]
+}
+```
+
+#### 已确认枚举
+
+| logicType | 含义 | logicValue 示例 |
+|-----------|------|----------------|
+| `1` | 等于 | `"\"具体值\""` / `"{!current.user}"` |
+| `4` | 晚于 (After) | `"\"2026-07-01\""` / `"{!global.now}"` |
+| `10` | 为空 | 无此字段 |
+| `11` | 不为空 | 无此字段 |
+
+| logicalOperator | 含义 |
+|-----------------|------|
+| `1` | AND |
+| `2` | OR |
+
+| 动态值 | 含义 |
+|--------|------|
+| `{!current.user}` | 当前登录用户 |
+| `{!global.now}` | 当前日期时间 |
+
+#### 代码示例
+
+```javascript
+const { getListFilters, saveListFilter, LOGIC_TYPE, LOGICAL_OP } = require('./lib/save-list-layout');
+
+// 查询现有过滤
+const { data } = await getListFilters(page, layoutId);
+
+// 设置过滤（全量替换）
+const result = await saveListFilter(page, {
+  belongId: layoutId,
+  id: data?.id,           // 首次不传，更新时传已有的 id
+  details: [
+    { id: uuid(), relationId: 'r1', targetType: 1, targetId: '字段UUID',
+      targetCode: 'created_time__sys', logicType: LOGIC_TYPE.AFTER,
+      logicValue: '"2026-07-01"', targetFieldDataType: 7, index: Date.now() },
+    { id: uuid(), relationId: 'r1', targetType: 1, targetId: '字段UUID',
+      targetCode: 'created_by__sys', logicType: LOGIC_TYPE.EQUAL,
+      logicValue: '{!current.user}', targetFieldDataType: 15, index: Date.now() }
+  ],
+  relations: [
+    { id: 'r1', logicalOperator: LOGICAL_OP.AND, index: Date.now() }
+  ]
+});
 ```
 
 ---
@@ -701,8 +868,9 @@ const { createLifecycleStatus } = require('./lib/create-lifecycle-status');
 | 字段创建 | SaveField (14/16) | ✅ 已支持 | dataType 矩阵完整，3 种类型待补 | `getFieldList(objCode)` |
 | 字段查询 | FieldPage | ✅ 已支持 | 分页查询 | — |
 | 选项集 | ObjectPicklist/save | ✅ 已支持 | 含选项值批量创建 | `getPicklistOptions(code)` |
-| 表单布局 | SaveLayoutDetail | ✅ 已支持 | 含 section + control 完整结构 | — |
-| 列表布局 | Listlayout/Save + AddColumns | ✅ 已支持 | 两步创建 | — |
+| 表单布局 | Layout/SaveLayoutDetail + LayoutList + LayoutDetail | ✅ 已重构 | 含 section + control 完整结构 + 查询 API + CONTROL_TYPE 常量 | — |
+| 列表布局 | Listlayout/Save + AddColumns + List + Columns | ✅ 已支持 | 创建/查询/设置字段（全量替换） | `getListColumns(id)` |
+| 数据过滤 | Listlayout/SaveFilter + Filters | ⚠️ 待完善 | upsert 模式，logicType 枚举仅确认 4 种 | `getListFilters(id)` |
 | 生命周期状态 | Status/Create | ✅ 已支持 | 创建状态节点 | `getLifecycleStatus(objCode)` |
 | 生命周期 8 个查询 | LifecycleRole/Get 等 | ⚠️ 待验证 | API 路径已捕获，参数/响应未确认 | — |
 | Token 刷新 | RefreshToken | ⚠️ 待验证 | `{ "fp": "固定指纹" }` | — |
@@ -794,7 +962,7 @@ const { getObjectInfo } = require('./lib/openapi-queries');
 
 ## 能力边界
 
-### ✅ 已支持（10 模块 / 12 核心 API + 8 待验证）
+### ✅ 已支持（10 模块 / 14 核心 API + 8 待验证）
 
 | 模块 | API | dataType 覆盖 | 成熟度 |
 |------|-----|--------------|--------|
@@ -802,8 +970,8 @@ const { getObjectInfo } = require('./lib/openapi-queries');
 | 对象 | SaveBasicObject | — | ✅ |
 | 字段 | SaveField + FieldPage | 14/16 种 | ✅ |
 | 选项集 | ObjectPicklist/save | — | ✅ |
-| 表单布局 | Layout/SaveLayoutDetail | — | ✅ |
-| 列表布局 | Listlayout/Save + AddColumns | — | ✅ |
+| 表单布局 | Layout/SaveLayoutDetail + LayoutList + LayoutDetail | — | ✅ |
+| 列表布局 | Listlayout/Save + AddColumns + List + Columns + SaveFilter | — | ✅ |
 | 生命周期 | Status/Create | — | ✅ |
 | 生命周期查询 | 8 个 Get API | — | ⚠️ 待验证 |
 | 菜单查询 | MenuGroup/QueryList | — | ⚠️ 待验证 |
@@ -953,9 +1121,16 @@ if (r.success) {
 | ⭐ Field | `/platform/BasicObject/SaveField` | 创建字段 | ✅ |
 | 📋 Field | `/platform/BasicObject/FieldPage` | 字段查询 | ✅ |
 | ⭐ Picklist | `/platform/ObjectPicklist/save` | 创建选项集 | ✅ |
-| ⭐ Layout | `/platform/Layout/SaveLayoutDetail` | 表单布局 | ✅ |
+| 📋 Layout | `/platform/Layout/LayoutList` | 查询表单布局列表 | ✅ |
+| 📋 Layout | `/platform/Layout/LayoutDetail` | 获取表单布局详情 | ✅ |
+| ⭐ Layout | `/platform/Layout/SaveLayoutDetail` | 保存表单布局 | ✅ |
 | ⭐ List | `/platform/Listlayout/Save` | 列表布局 | ✅ |
-| ⭐ List | `/platform/Listlayout/AddColumns` | 添加列 | ✅ |
+| ⭐ List | `/platform/Listlayout/AddColumns` | 设置显示字段（全量替换） | ✅ |
+| 📋 List | `/platform/Listlayout/List` | 查询布局列表 | ✅ |
+| 📋 List | `/platform/Listlayout/Columns` | 查询显示字段列 | ✅ |
+| 📋 Field | `/platform/BasicObject/FieldsAndOutField` | 查询可选字段（含跨对象） | ✅ |
+| ⭐ Filter | `/platform/Listlayout/SaveFilter` | 保存过滤条件（upsert） | ⚠️ |
+| 📋 Filter | `/platform/Listlayout/Filters` | 查询过滤配置 | ⚠️ |
 | ⭐ Lifecycle | `/config/lifecycle/Status/Create` | 创建状态 | ✅ |
 | 📋 Lifecycle | `/config/power/LifecycleRole/Get` | 角色查询 | ⚠️ |
 | 📋 Lifecycle | `/config/power/LifestatusUserAction/Get` | 用户动作 | ⚠️ |
@@ -987,8 +1162,8 @@ if (r.success) {
 | `create-object.js` | 对象创建 | `createObject` | ✅ |
 | `create-field.js` | 字段创建 | `createField` + 14 个类型快捷函数 + `queryFields` | ✅ |
 | `create-picklist.js` | 选项集创建 | `createPicklist` | ✅ |
-| `save-form-layout.js` | 表单布局 | `saveFormLayout` | ✅ |
-| `save-list-layout.js` | 列表布局 | `saveListLayout`, `addListColumns` | ✅ |
+| `save-form-layout.js` | 表单布局 | `getFormLayouts`, `getFormLayoutDetail`, `saveFormLayout`, `CONTROL_TYPE` | ✅ |
+| `save-list-layout.js` | 列表布局 | `getListLayouts`, `getListColumns`, `saveListLayout`, `setListColumns`, `addListColumns`(@deprecated), `getListFilters`, `saveListFilter`, `LOGIC_TYPE`, `LOGICAL_OP` | ✅ |
 | `create-lifecycle-status.js` | 生命周期状态 | `createLifecycleStatus` | ✅ |
 | `openapi-queries.js` | OpenAPI 查询 | `getOpenApiToken`, `getObjectInfo`, `getFieldList`, `getPicklistOptions`, `getLifecycleStatus` | ✅ |
 | `orchestrate.js` | 编排器 | `runFullWorkflow(page, config)` | ✅ |
@@ -1012,8 +1187,8 @@ node lib/orchestrate.js
 
 ---
 
-> **版本**：v0.5.0  
-> **更新**：模块化重构 — lib/ 拆分为 11 个独立模块（core + 8 功能模块 + 编排器 + index 统一入口），每个模块含 JSDoc 示例和独立运行入口，各章节嵌入代码示例
-> **日期**：2026-07-14  
+> **版本**：v0.5.1  
+> **更新**：表单布局模块重构 — 新增 getFormLayouts / getFormLayoutDetail 查询 API，补充 CONTROL_TYPE 常量定义，重写 §五 章节为完整的核心概念 + API 详情 + 两场景代码示例
+> **日期**：2026-07-22  
 > **数据来源**：2026-07-08 API 录制（Phase 1: 20 POST + Phase 2: 16 新增）  
 > **测试环境**：standard-val.aksoegmp.com

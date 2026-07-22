@@ -31,7 +31,7 @@ const { login } = require('../../shared/browser-manager');
 const { createObject } = require('./create-object');
 const { createTextField, queryFields } = require('./create-field');
 const { saveFormLayout } = require('./save-form-layout');
-const { saveListLayout, addListColumns } = require('./save-list-layout');
+const { saveListLayout, setListColumns } = require('./save-list-layout');
 const { createLifecycleStatus } = require('./create-lifecycle-status');
 const { createPicklist } = require('./create-picklist');
 const { getObjectInfo, getFieldList, getLifecycleStatus } = require('./openapi-queries');
@@ -77,29 +77,12 @@ async function runFullWorkflow(page, config) {
       summary.steps.push({ step: 'field', name: f.name, success: fResult.success });
     }
 
-    // 5. 创建表单布局（如需要）
+    // 5. 表单布局 — 对象创建时已自带默认布局（source=2），通常无需新建
+    //    如需修改默认布局的 sections/controls，请手动在 UI 中操作或使用 saveFormLayout
+    //    参见 README.md 第五节
     if (layouts && layouts.formName) {
-      const fieldItems = await queryFields(page, info.objectId);
-      const controls = fieldItems.items.map((item, i) => ({
-        id: `ctrl_${i}_${Date.now()}`,
-        sectionId: 'sec_main',
-        code: item.code,
-        name: item.name,
-        fieldId: item.id,
-        type: '',
-        gridSpan: 1,
-        attrs: {}
-      }));
-      const formResult = await saveFormLayout(page, {
-        objectId: info.objectId,
-        objectTypeId: info.objectId,
-        name: layouts.formName,
-        code: `layout_${objConf.code.replace(/__c$/, '')}`,
-        sections: [{ id: 'sec_main', code: 'sec_main__cs', name: '基本信息', type: 1, columnsNum: 2 }],
-        controls
-      });
-      log('表单布局', formResult);
-      summary.steps.push({ step: 'formLayout', success: formResult.success });
+      log('表单布局', { success: true, message: '对象已自带默认表单布局，跳过创建' });
+      summary.steps.push({ step: 'formLayout', success: true, note: '使用默认布局' });
     }
 
     // 6. 创建列表布局（如需要）
@@ -115,7 +98,7 @@ async function runFullWorkflow(page, config) {
         const cols = fieldItems.items.slice(0, 4).map((item, i) => ({
           fieldId: item.id, fieldPath: item.code, sort: i + 1
         }));
-        await addListColumns(page, listResult.layoutId, cols);
+        await setListColumns(page, listResult.layoutId, cols);
       }
       log('列表布局', listResult);
       summary.steps.push({ step: 'listLayout', success: listResult.success });
