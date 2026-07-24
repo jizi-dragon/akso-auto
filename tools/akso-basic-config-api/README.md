@@ -5,7 +5,7 @@
 > **执行入口**：Playwright npm 包 → `page.evaluate(fetch)`，由 `shared/browser-manager.js` 管理浏览器生命周期  
 > **原则**：登录走浏览器 DOM（`shared/browser-manager.js`），配置走 HTTP API。一次登录，全程 API 直调。  
 > **性能**：DOM 模式 2 分钟 → API 模式 3 秒（40x 提速）  
-> **覆盖**：10 个模块 / 16 个核心 API（✅）+ 10 个待验证/待完善 API（⚠️）/ 14 种字段类型  
+> **覆盖**：10 个模块 / 19 个核心 API（✅）+ 10 个待验证/待完善 API（⚠️）/ 14 种字段类型  
 > **环境信息**：存储于外部 `AksoGMP_配置环境清单.xlsx`，本工具不含密码
 
 > 📂 **文件结构**：
@@ -21,9 +21,11 @@
 > │   ├── save-form-layout.js     ← 表单布局保存
 > │   ├── save-list-layout.js     ← 列表布局（两步创建）
 > │   ├── create-lifecycle-status.js ← 生命周期状态创建
-> │   ├── openapi-queries.js      ← OpenAPI 查询辅助层
-> │   ├── orchestrate.js          ← 编排器：一键串联全流程
-> │   └── index.js                ← 统一入口（兼容旧 api-helpers.js）
+│   ├── create-workflow.js               ← 工作流基础 CRUD
+│   ├── save-workflow-start-step.js       ← 工作流开始步骤参与者配置
+│   ├── openapi-queries.js               ← OpenAPI 查询辅助层
+│   ├── orchestrate.js                   ← 编排器：一键串联全流程
+│   └── index.js                         ← 统一入口（兼容旧 api-helpers.js）
 > ├── examples/
 > │   └── full-workflow.md
 > └── 依赖 shared/browser-manager.js（项目根公用层，DOM/API 共用）
@@ -786,43 +788,273 @@ const { createLifecycleStatus } = require('./lib/create-lifecycle-status');
 
 ---
 
-## 八、工作流（API 探索）
+## 八、⭐ 工作流 — Workflow CRUD
 
-> ⚠️ 工作流模块的 API 探索处于早期阶段。目前仅确认了查询端点，创建 API 尚未捕获。
+> ✅ 工作流基础信息的 CRUD 操作已支持，通过 `create-workflow.js` 模块提供。
 
-### 8.1 工作流创建 API ❌ 待探索
+### 8.1 相关 API
 
-> **当前状态**：工作流（Workflow）的创建/保存 API 尚未录制。  
-> **探索方式**：需要在实时浏览器会话中，导航到工作流配置页面（`/admin/config/workflow`），配合 DevTools Network 面板录制 `POST` 请求。
+| API | 方法 | 用途 |
+|-----|------|------|
+| `/api/platform/Workflow/AddWorkflowBasic` | POST | 创建工作流 |
+| `/api/platform/Workflow/GetWorkflowBasic` | GET | 获取工作流详情 |
+| `/api/platform/Workflow/GetWorkflowBasicPageViewList` | POST | 分页查询工作流列表 |
+| `/api/platform/Workflow/ChangeWorkflowBasicStatus` | POST | 变更工作流状态（草稿/启用） |
+| `/api/platform/Workflow/DeleteWorkflowBasic` | POST | 删除工作流（携带 body，使用 POST 代替 DELETE） |
 
-**探索步骤**：
-1. `browser_navigate` → `/admin/config/workflow`
-2. 点击「创建」按钮 → 填写名称/Code
-3. 从工具栏拖拽节点（参与者、任务、判断、通知、电子签名）到画布
-4. 用连线连接节点形成完整流程
-5. 点击「保存」（或「保存并激活」）时录制 Network 中的 `POST` 请求
+### 8.2 常量和枚举
 
-**已知工作流查询端点路标**：
+| 常量 | 值 | 含义 |
+|------|-----|------|
+| `WORKFLOW_STATUS.DRAFT` | `10` | 草稿 |
+| `WORKFLOW_STATUS.ENABLED` | `20` | 启用 |
+| `WORKFLOW_TYPE.RECORD` | `10` | 记录工作流 |
 
-| API | 已知路径 | 成熟度 |
-|-----|---------|--------|
-| 工作流列表查询 | `/api/config/workflow/QueryList`（推测） | ❌ 待探索 |
-| 工作流节点查询 | `/api/config/workflow/Node/Get`（推测） | ❌ 待探索 |
-| 关联工作流查询 | `/config/power/LifestatusWorkflow/Get` | ⚠️ 待验证（见七.2） |
+### 8.3 API 详情
 
-### 8.1b 工作流与生命周期绑定 API ❌ 待探索
-工作流通过"触发条件 = 状态变更时 + 对象 + 生命周期动作"来绑定到生命周期。
-此绑定关系可能在两个位置创建：
-1. 工作流编辑器中设置触发条件（创建/更新工作流 API 中作为参数）
-2. 生命周期配置中关联工作流（状态属性面板）
+#### createWorkflow(page, config)
+创建新工作流（默认草稿状态）。
 
-**探索步骤**：在 DOM 工具指导下完成 DOM 操作（8.2 步骤 3），同时打开 DevTools Network 面板录制 POST 请求。重点关注请求体中出现的 lifecycleStatusId、userActionId、workflowId 等关联字段。
+**参数**：
+- `name` — 工作流名称
+- `code` — 工作流编码（`__c` 结尾）
+- `objectId` — 所属对象 UUID
+- `lifecycleId` — 生命周期 UUID
+- `workflowType` — 可选，默认 `WORKFLOW_TYPE.RECORD`（10）
+- `isSingleRecord` — 可选，默认 `true`
 
-### 8.2 工作流设置 API ❌ 待探索
+**返回**：`{ success, workflowConfigId, workflowBasicId, data, result }`
 
-> 工作流全局设置页面 `/admin/config/workflow-setting` 的相关 API 未捕获。
+#### getWorkflow(page, workflowConfigId)
+获取工作流详情。
 
----
+**返回**：`{ success, data, result }`
+
+#### listWorkflows(page, filters)
+分页查询工作流列表。
+
+**参数**：`{ pageIndex, pageSize, filters[] }`
+
+**返回**：`{ success, list, total, data, result }`
+
+#### changeWorkflowStatus(page, workflowConfigId, workflowBasicId, status)
+变更工作流状态（10=草稿 → 20=启用）。
+
+**返回**：`{ success, result }`
+
+#### deleteWorkflow(page, workflowConfigId)
+删除工作流。
+
+**返回**：`{ success, result }`
+
+### 8.4 代码示例
+
+```javascript
+const { launchBrowser, login, closeBrowser } = require('../../shared/browser-manager');
+const { createWorkflow, listWorkflows, changeWorkflowStatus, deleteWorkflow, WORKFLOW_STATUS } = require('./lib/create-workflow');
+
+(async () => {
+  const { browser, page } = await launchBrowser();
+  await login(page);
+
+  // 创建工作流
+  const result = await createWorkflow(page, {
+    name: '文档审批工作流',
+    code: 'doc_approval__c',
+    objectId: '对象UUID',
+    lifecycleId: '生命周期UUID'
+  });
+  console.log('创建结果:', result.success, result.workflowConfigId);
+
+  if (result.success) {
+    // 启用工作流
+    await changeWorkflowStatus(page, result.workflowConfigId, result.workflowBasicId, WORKFLOW_STATUS.ENABLED);
+
+    // 查询列表
+    const { list, total } = await listWorkflows(page, { pageSize: 10 });
+    console.log(`共 ${total} 个工作流`);
+  }
+
+  await closeBrowser(browser);
+})();
+```
+
+### 8.5 ⭐ 工作流步骤管理 — create-workflow-step.js
+
+> 提供审批步骤（stepType=30）、判断步骤（stepType=70）、动作步骤（stepType=90）的增删改查 + 复制功能。
+
+#### 步骤类型枚举
+
+| 常量 | 值 | 含义 |
+|------|-----|------|
+| `STEP_TYPE.START` | `10` | 开始（系统自动生成） |
+| `STEP_TYPE.END` | `20` | 结束（系统自动生成） |
+| `STEP_TYPE.TASK` | `30` | 审批步骤 |
+| `STEP_TYPE.DECISION` | `70` | 判断步骤 |
+| `STEP_TYPE.ACTION` | `90` | 动作步骤 |
+
+#### 审批模式枚举
+
+| 常量 | 值 | 含义 |
+|------|-----|------|
+| `DISPATCH_MODE.COUNTERSIGN` | `10` | 会签（所有人同意） |
+| `DISPATCH_MODE.OR_SIGN` | `20` | 或签（任一同意） |
+| `TASK_REQUIRE_TYPE.REQUIRED` | `20` | 必选 |
+
+#### addTaskStep(page, config)
+添加审批步骤。自动生成"同意 + 驳回"两个默认审批按钮。
+
+- **参数**: `{ workflowConfigId, name, code, taskAssign, taskName?, dispatchMode?, taskRequireType?, approvalLabel?, approvals?, nextStepId? }`
+- `taskAssign` — 参与者控件 ID（来自开始步骤 startUpControls 中的 control id）
+- **API**: `POST /api/platform/Workflow/AddWorkflowTaskStep`
+- **返回**: `{ success, stepId, data }`
+
+#### addDecisionStep(page, config)
+添加判断步骤（if-else 分支）。
+
+- **参数**: `{ workflowConfigId, name, code, rules, elseNextStepId }`
+- `rules`: `[{ targetId, targetCode, logicType, logicValue, nextStepId, conditionLabel? }]`
+- `logicType`: 40 = 等于，`logicValue` 需用双引号包裹，如 `"\"按钮UUID\""`
+- `targetId/nextStepId` 均为步骤 UUID
+- **API**: `POST /api/platform/Workflow/AddWorkflowDecisionStep`
+- **返回**: `{ success, stepId, data }`
+
+#### addActionStep(page, config)
+添加动作步骤（如修改状态、发送通知等）。
+
+- **参数**: `{ workflowConfigId, name, code, behaviorType, behaviorValue, nextStepId? }`
+- `behaviorType`: 9 = 修改状态，7 = 发起工作流
+- `behaviorValue`: `{ statusId: "..." }`（修改状态）或 `{ workflowId: "...", isBeforeWorkflowCompleteReminderTask: true }`（发起工作流）
+- **API**: `POST /api/platform/Workflow/AddWorkflowActionStep`
+- **返回**: `{ success, stepId, data }`
+
+#### copyStep(page, config)
+复制已有步骤（含完整配置）。
+
+- **参数**: `{ stepName, stepCode, workflowConfigId, stepId }`
+- **API**: `POST /api/platform/Workflow/CopyWorkflowCurrentStep`
+- **返回**: `{ success, stepId, data }`
+
+#### 更新步骤 (updateTaskStep / updateDecisionStep / updateActionStep)
+- 参数: `(page, stepId, updates)` — 先查询现有详情，合并 updates 后提交
+- 常用场景：修改 nextStepId 完成步骤连线
+- **API**: 根据 stepType 路由到对应 `UpdateWorkflow{Task/Decision/Action}Step`
+
+#### getWorkflowSteps / getStepDetail
+- `getWorkflowSteps(page, workflowConfigId)` — 查询所有步骤及连线状态
+- `getStepDetail(page, stepId)` — 查询单步完整配置（含审批按钮/判断规则/动作行为）
+
+#### 代码示例：构建审批流程
+
+```javascript
+const { createWorkflow, changeWorkflowStatus, WORKFLOW_STATUS } = require('./lib/create-workflow');
+const { addTaskStep, addDecisionStep, addActionStep, copyStep,
+        updateTaskStep, updateDecisionStep, getWorkflowSteps, STEP_TYPE } = require('./lib/create-workflow-step');
+const { configStartStep } = require('./lib/save-workflow-start-step');
+
+// 1. 创建工作流
+const wf = await createWorkflow(page, { name: '审批流程', code: 'approval__c', objectId, lifecycleId });
+
+// 2. 配置开始步骤参与者 + 连线
+const steps = await getWorkflowSteps(page, wf.workflowConfigId);
+const startStep = steps.steps.find(s => s.stepType === STEP_TYPE.START);
+await configStartStep(page, {
+  workflowConfigId: wf.workflowConfigId,
+  stepId: startStep.id,
+  name: startStep.name, code: startStep.code, sort: startStep.sort,
+  participants: [{ name: '审核人', code: 'sh__c' }],
+  nextStepId: null  // 先不连线
+});
+
+// 3. 添加审批步骤
+const task = await addTaskStep(page, {
+  workflowConfigId: wf.workflowConfigId, name: '审核', code: 'shenhe__c',
+  taskAssign: '<参与者控件ID>', approvalLabel: '是否同意审核'
+});
+
+// 4. 添加判断步骤
+const decision = await addDecisionStep(page, {
+  workflowConfigId: wf.workflowConfigId, name: '判断：审核结果', code: 'pdsh__c',
+  rules: [{ targetId: task.stepId, targetCode: 'shenhe__c', logicType: 40,
+    logicValue: '"<同意按钮UUID>"', nextStepId: '<批准步骤ID>' }],
+  elseNextStepId: '<驳回动作步骤ID>'
+});
+
+// 5. 连线：开始 → 审核
+await configStartStep(page, { ..., nextStepId: task.stepId });
+
+// 6. 连线：审核 → 判断
+await updateTaskStep(page, task.stepId, { nextStepId: decision.stepId });
+
+// 7. 最终启用
+await changeWorkflowStatus(page, wf.workflowConfigId, wf.workflowBasicId, WORKFLOW_STATUS.ENABLED);
+```
+
+### 8.6 ⭐ 开始步骤配置 — save-workflow-start-step.js
+
+> 配置工作流开始步骤的参与者（审批人/批准人）及下一步连线。
+
+#### 常量
+
+| 常量 | 值 | 含义 |
+|------|-----|------|
+| `CTRL_TYPE.PARTICIPANT` | `20` | 参与者控件 |
+| `SELECT_USER_TYPE.SPECIFIED` | `10` | 指定用户 |
+
+#### configStartStep(page, config)
+配置开始步骤参与者和下游连线。
+
+- **参数**: `{ workflowConfigId, stepId, name, code, sort, nextStepId?, participants }`
+- `participants`: `[{ name, code, selectUserType?, allowRoleIds?, excludeRoleIds? }]`
+- 先查询现有步骤详情，合并 participants 构建 startUpControls，然后全量提交
+- **API**: `POST /api/platform/Workflow/UpdateWorkflowStartStep`
+- **返回**: `{ success, message, data }`
+
+#### getStartStepControls / getStartStepDetail
+- `getStartStepControls(page, workflowConfigId, stepId)` — 查询参与者控件列表
+- `getStartStepDetail(page, stepId)` — 查询开始步骤完整详情
+
+### 8.7 ⭐ 生命周期绑定工作流 — save-lifecycle-user-action.js
+
+> 在生命周期状态上创建"发起工作流"用户动作，使用户可通过按钮触发工作流。
+
+#### 常量
+
+| 常量 | 值 | 含义 |
+|------|-----|------|
+| `BEHAVIOR_TYPE.START_WORKFLOW` | `7` | 发起工作流 |
+| `BELONG_TYPE.STATUS` | `2` | 生命周期状态级别 |
+
+#### bindWorkflowToStatus(page, config)
+绑定工作流到生命周期状态。
+
+- **参数**: `{ statusId, lifecycleId, objectId, objectCode, workflowBasicId, actionName?, actionCode?, icon?, description? }`
+- 注意：使用 `workflowBasicId`（不是 workflowConfigId）
+- 自动查询已有用户动作并合并（幂等追加）
+- **API**: `PATCH /api/config/lifecycle/UserAction/Update`
+- **返回**: `{ success, message, data }`
+
+#### getUserActions(page, statusId)
+查询状态下的所有用户动作。
+
+- **API**: `POST /api/config/power/LifestatusUserAction/Get`
+- **返回**: `{ success, data }`
+
+#### 代码示例
+
+```javascript
+const { bindWorkflowToStatus } = require('./lib/save-lifecycle-user-action');
+
+await bindWorkflowToStatus(page, {
+  statusId: '31adf73d-4ec7-f33a-657c-3a2277eff47c',
+  lifecycleId: '生命周期UUID',
+  objectId: '对象UUID',
+  objectCode: 'test_999__c',
+  workflowBasicId: '3a22a587-dd40-da70-67fe-fc0ac9743d84',
+  actionName: '提交审批',
+  description: '发起工作流审批'
+});
+```
 
 ## 九、菜单与权限（API 探索）
 
@@ -877,8 +1109,9 @@ const { createLifecycleStatus } = require('./lib/create-lifecycle-status');
 | 生命周期状态连线 | 未知 | ❌ 待探索 | 需 Network 面板录制 | — |
 | 生命周期用户动作 | 未知 | ❌ 待探索 | 创建提交/审批/退回等动作 | — |
 | 生命周期阶段组 | 未知 | ❌ 待探索 | `/admin/config/stage-group` | — |
-| 工作流创建 | 未知 | ❌ 待探索 | 含节点、连线、激活 | — |
-| 工作流节点 | 未知 | ❌ 待探索 | 参与者/任务/判断/通知/签名 | — |
+| 工作流基础 CRUD | AddWorkflowBasic 等 5 个 API | ✅ 已支持 | 创建/查询/状态变更/删除 | — |
+| 工作流开始步骤 | UpdateWorkflowStartStep 等 3 个 API | ✅ 已支持 | 开始步骤参与者配置、连线、控件查询 | `getStartStepControls(id, stepId)` |
+| 工作流审批步骤/连线 | 未知 | ❌ 待探索 | 含审批节点、连线、触发条件 | — |
 | 菜单创建 | 未知 | ❌ 待探索 | MenuGroup/QueryList 已知 | — |
 | 权限集/字段安全 | 未知 | ❌ 待探索 | 含权限集、字段安全、角色分配 | — |
 | 编号规则 | 未知 | ❌ 待探索 | 前缀+日期+流水号规则 | — |
@@ -972,7 +1205,9 @@ const { getObjectInfo } = require('./lib/openapi-queries');
 | 选项集 | ObjectPicklist/save | — | ✅ |
 | 表单布局 | Layout/SaveLayoutDetail + LayoutList + LayoutDetail | — | ✅ |
 | 列表布局 | Listlayout/Save + AddColumns + List + Columns + SaveFilter | — | ✅ |
-| 生命周期 | Status/Create | — | ✅ |
+| 生命周期状态 | Status/Create | — | ✅ |
+| 工作流 | AddWorkflowBasic 等 5 个 API | — | ✅ |
+| 工作流开始步骤 | UpdateWorkflowStartStep 等 3 个 API | — | ✅ |
 | 生命周期查询 | 8 个 Get API | — | ⚠️ 待验证 |
 | 菜单查询 | MenuGroup/QueryList | — | ⚠️ 待验证 |
 | 对象动作 | BasicObjectAction/QueryList | — | ⚠️ 待验证 |
@@ -988,7 +1223,7 @@ const { getObjectInfo } = require('./lib/openapi-queries');
 
 - 字段：文件、自动编号、统计字段（3 种 dataType 未确认）
 - 生命周期：状态连线、用户动作创建、阶段组、整体保存
-- 工作流：创建节点/连线/激活、全局设置
+- 工作流：审批步骤节点/连线/触发条件/激活、全局设置
 - 菜单：创建/编辑菜单、菜单集查询
 - 权限：权限集、字段级安全、角色权限分配
 - 编号规则：导航 /admin/config/code-rules/list → 创建 → 保存时录制 POST 请求（推测 API 路径：/api/platform/CodeRule/Save）
@@ -1132,8 +1367,25 @@ if (r.success) {
 | ⭐ Filter | `/platform/Listlayout/SaveFilter` | 保存过滤条件（upsert） | ⚠️ |
 | 📋 Filter | `/platform/Listlayout/Filters` | 查询过滤配置 | ⚠️ |
 | ⭐ Lifecycle | `/config/lifecycle/Status/Create` | 创建状态 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/AddWorkflowBasic` | 创建工作流 | ✅ |
+| 📋 Workflow | `/platform/Workflow/GetWorkflowBasic` | 获取工作流详情 | ✅ |
+| 📋 Workflow | `/platform/Workflow/GetWorkflowBasicPageViewList` | 查询工作流列表 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/ChangeWorkflowBasicStatus` | 变更工作流状态 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/DeleteWorkflowBasic` | 删除工作流 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/AddWorkflowTaskStep` | 添加审批步骤 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/UpdateWorkflowTaskStep` | 更新审批步骤 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/AddWorkflowDecisionStep` | 添加判断步骤 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/UpdateWorkflowDecisionStep` | 更新判断步骤 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/AddWorkflowActionStep` | 添加动作步骤 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/UpdateWorkflowActionStep` | 更新动作步骤 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/CopyWorkflowCurrentStep` | 复制步骤 | ✅ |
+| ⭐ Workflow | `/platform/Workflow/UpdateWorkflowStartStep` | 配置开始步骤参与者/连线 | ✅ |
+| 📋 Workflow | `/platform/Workflow/GetWorkflowSteps` | 查询步骤列表 | ✅ |
+| 📋 Workflow | `/platform/Workflow/GetWorkflowStepWithDetails` | 获取步骤详情 | ✅ |
+| 📋 Workflow | `/platform/Workflow/GetWorkflowStepControls` | 查询开始步骤控件 | ✅ |
+| ⭐ Workflow | `/config/lifecycle/UserAction/Update` | 绑定工作流到状态（PATCH） | ✅ |
+| 📋 Lifecycle | `/config/power/LifestatusUserAction/Get` | 用户动作查询 | ✅ |
 | 📋 Lifecycle | `/config/power/LifecycleRole/Get` | 角色查询 | ⚠️ |
-| 📋 Lifecycle | `/config/power/LifestatusUserAction/Get` | 用户动作 | ⚠️ |
 | 📋 Lifecycle | `/config/power/LifestatusRelation/Get` | 状态关联 | ⚠️ |
 | 📋 Lifecycle | `/config/power/LifestatusWorkflow/Get` | 关联工作流 | ⚠️ |
 | 📋 Lifecycle | `/config/power/LifestatusApproveMatrix/Get` | 审批矩阵 | ⚠️ |
@@ -1157,7 +1409,7 @@ if (r.success) {
 
 | 文件名 | 功能 | 导出函数 | 可独立运行 |
 |--------|------|----------|:----------:|
-| `core.js` | 核心工具 | `apiPost`, `apiGet`, `getAuthToken`, `isSuccess`, `log`, `BASE`, `OPENAPI_BASE`, `ERROR_CODES` | — |
+| `core.js` | 核心工具 | `apiPost`, `apiGet`, `apiPatch`, `apiDelete`, `getAuthToken`, `isSuccess`, `log`, `BASE`, `OPENAPI_BASE`, `ERROR_CODES` | — |
 | `visibility.js` | 可视模式 | `enableVisibility`, `disableVisibility`, `isVisibilityOn` | ✅ |
 | `create-object.js` | 对象创建 | `createObject` | ✅ |
 | `create-field.js` | 字段创建 | `createField` + 14 个类型快捷函数 + `queryFields` | ✅ |
@@ -1165,6 +1417,10 @@ if (r.success) {
 | `save-form-layout.js` | 表单布局 | `getFormLayouts`, `getFormLayoutDetail`, `saveFormLayout`, `CONTROL_TYPE` | ✅ |
 | `save-list-layout.js` | 列表布局 | `getListLayouts`, `getListColumns`, `saveListLayout`, `setListColumns`, `addListColumns`(@deprecated), `getListFilters`, `saveListFilter`, `LOGIC_TYPE`, `LOGICAL_OP` | ✅ |
 | `create-lifecycle-status.js` | 生命周期状态 | `createLifecycleStatus` | ✅ |
+| `create-workflow.js` | 工作流基础 CRUD | `createWorkflow`, `getWorkflow`, `listWorkflows`, `changeWorkflowStatus`, `deleteWorkflow`, `WORKFLOW_STATUS`, `WORKFLOW_TYPE` | ✅ |
+| `create-workflow-step.js` | 工作流步骤管理 | `addTaskStep`, `addDecisionStep`, `addActionStep`, `copyStep`, `updateTaskStep`, `updateDecisionStep`, `updateActionStep`, `getWorkflowSteps`, `getStepDetail`, `STEP_TYPE`, `DISPATCH_MODE`, `TASK_REQUIRE_TYPE` | ✅ |
+| `save-workflow-start-step.js` | 工作流开始步骤 | `configStartStep`, `getStartStepControls`, `getStartStepDetail`, `CTRL_TYPE`, `SELECT_USER_TYPE` | ✅ |
+| `save-lifecycle-user-action.js` | 生命周期绑定工作流 | `getUserActions`, `bindWorkflowToStatus`, `BEHAVIOR_TYPE`, `BELONG_TYPE` | ✅ |
 | `openapi-queries.js` | OpenAPI 查询 | `getOpenApiToken`, `getObjectInfo`, `getFieldList`, `getPicklistOptions`, `getLifecycleStatus` | ✅ |
 | `orchestrate.js` | 编排器 | `runFullWorkflow(page, config)` | ✅ |
 | `index.js` | 统一入口 | 重新导出以上所有函数（兼容旧 api-helpers.js） | ✅ |
@@ -1187,8 +1443,8 @@ node lib/orchestrate.js
 
 ---
 
-> **版本**：v0.5.1  
-> **更新**：表单布局模块重构 — 新增 getFormLayouts / getFormLayoutDetail 查询 API，补充 CONTROL_TYPE 常量定义，重写 §五 章节为完整的核心概念 + API 详情 + 两场景代码示例
-> **日期**：2026-07-22  
+> **版本**：v0.5.2  
+> **更新**：新增工作流开始步骤参与者配置模块 — save-workflow-start-step.js，支持 configStartStep / getStartStepControls / getStartStepDetail，含 UpdateWorkflowStartStep 等 3 个 API
+> **日期**：2026-07-24  
 > **数据来源**：2026-07-08 API 录制（Phase 1: 20 POST + Phase 2: 16 新增）  
 > **测试环境**：standard-val.aksoegmp.com

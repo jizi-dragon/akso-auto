@@ -64,6 +64,32 @@ async function apiGet(page, apiPath) {
   }, { apiPath, token, baseUrl: BASE });
 }
 
+async function apiPatch(page, apiPath, body) {
+  const token = await getAuthToken(page);
+  return page.evaluate(async ({ apiPath, body, token, baseUrl }) => {
+    const resp = await fetch(baseUrl + apiPath, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify(body)
+    });
+    return resp.json();
+  }, { apiPath, body, token, baseUrl: BASE });
+}
+
+async function apiDelete(page, apiPath) {
+  const token = await getAuthToken(page);
+  return page.evaluate(async ({ apiPath, token, baseUrl }) => {
+    const resp = await fetch(baseUrl + apiPath, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    return resp.json();
+  }, { apiPath, token, baseUrl: BASE });
+}
+
 function isSuccess(resp) {
   return resp && resp.code === 0;
 }
@@ -77,5 +103,5 @@ function log(step, result) {
 
 module.exports = {
   BASE, OPENAPI_BASE, ERROR_CODES,
-  getAuthToken, apiPost, apiGet, isSuccess, log
+  getAuthToken, apiPost, apiGet, apiPatch, apiDelete, isSuccess, log
 };

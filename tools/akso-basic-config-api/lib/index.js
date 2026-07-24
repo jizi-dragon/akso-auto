@@ -22,6 +22,10 @@ const createPicklist = require('./create-picklist');
 const saveFormLayout = require('./save-form-layout');
 const saveListLayout = require('./save-list-layout');
 const createLifecycleStatus = require('./create-lifecycle-status');
+const createWorkflow = require('./create-workflow');
+const createWorkflowStep = require('./create-workflow-step');
+const saveWorkflowStartStep = require('./save-workflow-start-step');
+const saveLifecycleUserAction = require('./save-lifecycle-user-action');
 const openapiQueries = require('./openapi-queries');
 
 module.exports = {
@@ -33,6 +37,10 @@ module.exports = {
   ...saveFormLayout,
   ...saveListLayout,
   ...createLifecycleStatus,
+  ...createWorkflow,
+  ...createWorkflowStep,
+  ...saveWorkflowStartStep,
+  ...saveLifecycleUserAction,
   ...openapiQueries
 };
 
